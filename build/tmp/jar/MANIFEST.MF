@@ -1,0 +1,10 @@
+Manifest-Version: 1.0
+Specification-Title: superbstealth
+Specification-Vendor: KarlKarlmann, Atsuishio, Contributors
+Specification-Version: 1
+Implementation-Title: superbstealth
+Implementation-Version: 1.0.0
+Implementation-Vendor: KarlKarlmann, Atsuishio, Contributors
+Implementation-Timestamp: 2026-10-29T03:55:36+0900
+MixinConfigs: superbstealth.mixins.json
+
