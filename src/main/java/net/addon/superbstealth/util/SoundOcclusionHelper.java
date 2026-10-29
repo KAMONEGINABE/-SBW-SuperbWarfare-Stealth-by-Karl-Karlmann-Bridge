@@ -5,6 +5,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
@@ -14,13 +15,14 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 public class SoundOcclusionHelper {
 
-    public static final float FLOOR_CEILING_PENALTY = 10.0F; // 床/天井スラブ貫通ペナルティ (-10m)
-    public static final float WALL_PENALTY = 5.0F;           // 間仕切り壁・ドア貫通ペナルティ (-5m)
-    public static final float DETOUR_PENALTY = 4.0F;         // 回折・迂回ペナルティ (-4m)
+    public static final float FLOOR_CEILING_PENALTY = 12.0F; // 床/天井スラブ貫通ペナルティ (-12m)
+    public static final float WALL_PENALTY = 8.0F;           // 間仕切り壁・ドア貫通ペナルティ (-8m)
+    public static final float DETOUR_PENALTY = 2.0F;         // 回折・迂回ペナルティ (-2m)
     public static final int MAX_DETOUR_HOPS = 3;             // 最大屈折回数 (ホップ数)
 
     public record SoundResult(
@@ -49,7 +51,8 @@ public class SoundOcclusionHelper {
 
     /**
      * 音源からターゲット地点への音波伝播をシミュレートする。
-     * 最大3回までの連鎖開口部迂回（Multi-hop Waypoint Traversal）および直進多重貫通減衰を評価する。
+     * 直進多重貫通波（ルートA）と連鎖開口部回折波（ルートB）を並行評価し、
+     * 最も残存音波強度（Volume）が大きい最強ルートを自動採用する（Max-Volume Selection）。
      */
     public static SoundResult checkSoundPropagation(Level level, Vec3 source, Vec3 target, float initialRadius) {
         if (initialRadius <= 0.0F) {
@@ -61,26 +64,37 @@ public class SoundOcclusionHelper {
             return SoundResult.blocked(target);
         }
 
-        // 1. 直線上に障害物がないか確認
+        // 1. 直線上に障害物がないか確認 (見通しがあれば最優先で即時リターン)
         ClipContext directCtx = new ClipContext(source, target, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, null);
         BlockHitResult directHit = level.clip(directCtx);
         if (directHit.getType() == HitResult.Type.MISS) {
-            // 直線到達 (0ホップ)
             return SoundResult.reachedDirect(straightDist, (float) (initialRadius - straightDist), source, target);
         }
 
-        // 2. 最大3回の連鎖開口部迂回（ドア -> 階段穴 -> 敵）を探索
+        // 2. ルート A: 直進多重貫通減衰の計算 (壁 -8m / 床 -12m 累積, 出射面判定付き)
+        SoundResult penResult = checkMultiPenetration(level, source, target, initialRadius, straightDist);
+
+        // 3. ルート B: 連鎖開口部迂回の計算 (最大3ホップ, 回折 -2m 累積)
         List<Vec3> initialPath = new ArrayList<>();
         initialPath.add(source);
         Set<BlockPos> visited = new HashSet<>();
+        SoundResult detResult = searchMultiHopDetour(level, source, target, initialRadius, 0, initialPath, visited);
 
-        SoundResult detourResult = searchMultiHopDetour(level, source, target, initialRadius, 0, initialPath, visited);
-        if (detourResult.reached()) {
-            return detourResult;
+        // 4. 最大音量（残存強度の最大値）を選択
+        boolean penReached = penResult.reached();
+        boolean detReached = detResult.reached();
+
+        if (penReached && detReached) {
+            // 両方届く場合は、より音が大きい（残存強度が高い）ルートを採用！
+            return (detResult.remainingStrength() >= penResult.remainingStrength()) ? detResult : penResult;
+        } else if (detReached) {
+            return detResult;
+        } else if (penReached) {
+            return penResult;
+        } else {
+            // 両方遮断された場合、より遠くまで進んだ（敵に近い）衝突地点を採用
+            return (detResult.stopPos() != null) ? detResult : penResult;
         }
-
-        // 3. 迂回できない、または迂回ルートが消音した場合は、直進の多重貫通減衰を評価
-        return checkMultiPenetration(level, source, target, initialRadius, straightDist);
     }
 
     /**
@@ -144,18 +158,22 @@ public class SoundOcclusionHelper {
 
         for (BlockPos opening : openingCandidates) {
             visitedOpenings.add(opening);
-            Vec3 openingCenter = Vec3.atCenterOf(opening);
-            double distToOpening = currentPos.distanceTo(openingCenter);
+            Vec3 openingExitPoint = calculateOpeningExitPoint(level, opening, face, target);
+            double distToOpening = currentPos.distanceTo(openingExitPoint);
 
-            // 回折ペナルティ（-4m）を減算
+            // 回折ペナルティ（-2m）を減算
             float nextRemaining = remainingRadius - (float) distToOpening - DETOUR_PENALTY;
             if (nextRemaining > 0.0F) {
                 List<Vec3> nextPath = new ArrayList<>(currentPath);
-                nextPath.add(openingCenter);
+                nextPath.add(openingExitPoint);
+
+                // 開口部出口境界からターゲット方向にわずかに進めた点から次区間のレイキャストを開始
+                Vec3 rayDir = target.subtract(openingExitPoint).normalize();
+                Vec3 nextStartPos = openingExitPoint.add(rayDir.scale(0.02));
 
                 SoundResult subResult = searchMultiHopDetour(
                         level,
-                        openingCenter,
+                        nextStartPos,
                         target,
                         nextRemaining,
                         currentHop + 1,
@@ -174,6 +192,50 @@ public class SoundOcclusionHelper {
         return bestResult;
     }
 
+    /**
+     * 開口部ブロック（階段穴やドア）から次の空間へ抜ける出口座標（openingExitPoint）を計算する。
+     * 床・天井の穴なら垂直境界（上面/下面）、壁の穴・ドアなら水平出射境界を基準にし、
+     * 開口部自体の内壁や床スラブの角への誤衝突を幾何学的に防止する。
+     */
+    private static Vec3 calculateOpeningExitPoint(Level level, BlockPos opening, Direction hitFace, Vec3 target) {
+        Vec3 center = Vec3.atCenterOf(opening);
+
+        boolean isVerticalOpening = (hitFace.getAxis() == Direction.Axis.Y)
+                || isPhysicallyPassable(level, opening.above())
+                || isPhysicallyPassable(level, opening.below());
+
+        if (isVerticalOpening && Math.abs(target.y - center.y) > 0.5) {
+            // 床または天井の開口部（階段吹き抜け等）
+            // 下から上へ向かう場合は上面境界（y + 1.0）、上から下へ向かう場合は下面境界（y）が出口面
+            double exitY = (target.y > center.y) ? (opening.getY() + 1.0) : (opening.getY());
+
+            // 水平位置は、穴の中心からターゲットへ向かう方向に少しだけオフセット（穴の縁を越えない安全マージン: ±0.35m）
+            Vec3 dir = target.subtract(center);
+            double lenHoriz = Math.sqrt(dir.x * dir.x + dir.z * dir.z);
+            double offsetX = 0.0;
+            double offsetZ = 0.0;
+            if (lenHoriz > 1.0E-4) {
+                offsetX = Math.min(0.35, Math.max(-0.35, (dir.x / lenHoriz) * 0.35));
+                offsetZ = Math.min(0.35, Math.max(-0.35, (dir.z / lenHoriz) * 0.35));
+            }
+
+            return new Vec3(opening.getX() + 0.5 + offsetX, exitY, opening.getZ() + 0.5 + offsetZ);
+        } else {
+            // 垂直壁の開口部（ドアや壁の穴）
+            AABB openingBounds = new AABB(opening);
+            Vec3 rayDir = target.subtract(center).normalize();
+
+            // 開口部空間領域（openingBounds）からターゲット方向へ抜ける出射点を算出
+            Optional<Vec3> exit = openingBounds.clip(center, target);
+            if (exit.isPresent()) {
+                return exit.get();
+            }
+
+            // フォールバック: ターゲット方向への境界シフト
+            return center.add(rayDir.scale(0.49));
+        }
+    }
+
     private static double calculatePathLength(List<Vec3> path) {
         double dist = 0.0;
         for (int i = 0; i < path.size() - 1; i++) {
@@ -185,6 +247,7 @@ public class SoundOcclusionHelper {
     /**
      * 直線上のすべての壁・床を貫通走査し、累積減衰を計算する。
      * 1つのブロックで入る面と出る面の両方をカウントしないよう、BlockPos単位で管理。
+     * 入射面だけでなく出射面（抜ける面）も判定し、上面/下面から抜ける場合は床減衰（-12m）を適用。
      */
     private static SoundResult checkMultiPenetration(Level level, Vec3 source, Vec3 target, float initialRadius, double straightDist) {
         float remainingRadius = initialRadius;
@@ -213,6 +276,21 @@ public class SoundOcclusionHelper {
             if (!traversedBlocks.contains(hitPos)) {
                 traversedBlocks.add(hitPos);
                 boolean isFloorCeiling = (face.getAxis() == Direction.Axis.Y);
+
+                // 入射面が水平面であっても、斜めレイで上面または下面から抜ける場合は床スラブ貫通とみなす
+                if (!isFloorCeiling && rayDir.y != 0.0) {
+                    AABB box = new AABB(hitPos);
+                    Optional<Vec3> exit = box.clip(hit.getLocation().add(rayDir.scale(0.001)), target);
+                    if (exit.isPresent()) {
+                        Vec3 exitPt = exit.get();
+                        double topY = hitPos.getY() + 1.0;
+                        double bottomY = hitPos.getY();
+                        if (Math.abs(exitPt.y - topY) < 0.001 || Math.abs(exitPt.y - bottomY) < 0.001) {
+                            isFloorCeiling = true;
+                        }
+                    }
+                }
+
                 float penalty = isFloorCeiling ? FLOOR_CEILING_PENALTY : WALL_PENALTY;
                 remainingRadius -= penalty;
 
@@ -309,8 +387,6 @@ public class SoundOcclusionHelper {
 
     /**
      * そのブロックが物理的に「音が通り抜けられる開口部」かどうかを判定する。
-     * ドアの設置向き（FACING）や OPEN フラグに依存せず、
-     * ブロック中心を通る東西（X軸）または南北（Z軸）の短いローカルレイキャスト（長さ 1.2m）で直接判定する。
      */
     private static boolean isPhysicallyPassable(Level level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
@@ -328,13 +404,13 @@ public class SoundOcclusionHelper {
         // X軸（東西）の通り抜けテスト（長さ 1.2 ブロック）
         ClipContext ctxX = new ClipContext(center.add(-0.6, 0, 0), center.add(0.6, 0, 0), ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, null);
         if (level.clip(ctxX).getType() == HitResult.Type.MISS) {
-            return true; // 東西に通路が開いている！
+            return true;
         }
 
         // Z軸（南北）の通り抜けテスト（長さ 1.2 ブロック）
         ClipContext ctxZ = new ClipContext(center.add(0, 0, -0.6), center.add(0, 0, 0.6), ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, null);
         if (level.clip(ctxZ).getType() == HitResult.Type.MISS) {
-            return true; // 南北に通路が開いている！
+            return true;
         }
 
         return false;
