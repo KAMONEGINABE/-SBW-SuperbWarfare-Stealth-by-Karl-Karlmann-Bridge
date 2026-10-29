@@ -8,6 +8,7 @@ import net.addon.superbstealth.SuperbStealthMod;
 import net.addon.superbstealth.util.DebugParticleManager;
 import net.addon.superbstealth.util.SoundOcclusionHelper;
 import net.addon.superbstealth.util.SoundOcclusionHelper.SoundResult;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -83,6 +84,9 @@ public class GunShootEventListener {
         int detouredCount = 0;
         long gameTime = level.getGameTime();
 
+        // 最適化: 射撃地点周辺の部屋出口（開いたドア等）をMobループ前に1度だけ事前解決してキャッシュ
+        BlockPos cachedShooterExit = SoundOcclusionHelper.findShooterRoomExit(level, BlockPos.containing(shootPos), 4);
+
         ServerPlayer debugPlayer = (shooter instanceof ServerPlayer sp && SuperbStealthMod.DEBUG_PLAYERS.contains(sp.getUUID())) ? sp : null;
         if (debugPlayer != null) {
             debugPlayer.sendSystemMessage(Component.literal(
@@ -92,8 +96,8 @@ public class GunShootEventListener {
 
         for (Mob mob : nearbyMobs) {
             Vec3 mobEyePos = mob.getEyePosition();
-            // 音波の遮蔽・多重貫通減衰・最大3ホップの連鎖開口部迂回をシミュレート
-            SoundResult result = SoundOcclusionHelper.checkSoundPropagation(level, shootPos, mobEyePos, effectiveSoundRadius);
+            // 音波の遮蔽・多重貫通減衰・最大3ホップの連鎖開口部迂回（分枝限定法・事前キャッシュ付き）をシミュレート
+            SoundResult result = SoundOcclusionHelper.checkSoundPropagation(level, shootPos, mobEyePos, effectiveSoundRadius, cachedShooterExit);
 
             // デバッグ視覚化 (5秒間持続する多段パーティクル線 & チャット通知)
             if (debugPlayer != null) {

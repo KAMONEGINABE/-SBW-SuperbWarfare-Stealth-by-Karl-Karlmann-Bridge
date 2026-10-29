@@ -4,11 +4,13 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 import java.util.ArrayList;
@@ -50,11 +52,20 @@ public class SoundOcclusionHelper {
     }
 
     /**
+     * 音源からターゲット地点への音波伝播をシミュレートする（後方互換用オーバーロード）。
+     */
+    public static SoundResult checkSoundPropagation(Level level, Vec3 source, Vec3 target, float initialRadius) {
+        return checkSoundPropagation(level, source, target, initialRadius, null);
+    }
+
+    /**
      * 音源からターゲット地点への音波伝播をシミュレートする。
      * 直進多重貫通波（ルートA）と連鎖開口部回折波（ルートB）を並行評価し、
      * 最も残存音波強度（Volume）が大きい最強ルートを自動採用する（Max-Volume Selection）。
+     *
+     * @param cachedShooterExit 事前に解決された射撃者周囲の部屋出口（null の場合は内部で走査）
      */
-    public static SoundResult checkSoundPropagation(Level level, Vec3 source, Vec3 target, float initialRadius) {
+    public static SoundResult checkSoundPropagation(Level level, Vec3 source, Vec3 target, float initialRadius, BlockPos cachedShooterExit) {
         if (initialRadius <= 0.0F) {
             return SoundResult.blocked(source);
         }
@@ -74,11 +85,29 @@ public class SoundOcclusionHelper {
         // 2. ルート A: 直進多重貫通減衰の計算 (壁 -8m / 床 -12m 累積, 出射面判定付き)
         SoundResult penResult = checkMultiPenetration(level, source, target, initialRadius, straightDist);
 
-        // 3. ルート B: 連鎖開口部迂回の計算 (最大3ホップ, 回折 -2m 累積)
+        // ルートA到達時、その残存強度をルートBの枝刈り閾値（minStrengthThreshold）として利用する。
+        // 未到達の場合は 0.0F（消音されないこと）が足切り閾値。
+        float minStrengthThreshold = penResult.reached() ? penResult.remainingStrength() : 0.0F;
+
+        // 【最適化: 理論上限によるルートB完全スキップ判定】
+        // 迂回には最低でも 1回のホップ（-2m）と直線以上の移動距離が必要となるため、
+        // ルートAの貫通減衰ペナルティが回折ペナルティ（DETOUR_PENALTY: 2.0m）以下であれば、
+        // 物理的にルートBがルートAを上回ることは絶対にあり得ない。
+        if (penResult.reached()) {
+            float totalPenPenalty = (float) (initialRadius - straightDist) - penResult.remainingStrength();
+            if (totalPenPenalty <= DETOUR_PENALTY) {
+                return penResult;
+            }
+        }
+
+        // 3. ルート B: 連鎖開口部迂回の計算 (最大3ホップ, 回折 -2m 累積, 分枝限定法による早期枝刈り付き)
         List<Vec3> initialPath = new ArrayList<>();
         initialPath.add(source);
         Set<BlockPos> visited = new HashSet<>();
-        SoundResult detResult = searchMultiHopDetour(level, source, target, initialRadius, 0, initialPath, visited);
+        SoundResult detResult = searchMultiHopDetour(
+                level, source, target, initialRadius, 0, initialPath, visited,
+                minStrengthThreshold, cachedShooterExit
+        );
 
         // 4. 最大音量（残存強度の最大値）を選択
         boolean penReached = penResult.reached();
@@ -98,7 +127,7 @@ public class SoundOcclusionHelper {
     }
 
     /**
-     * 再帰的な連鎖開口部探索（最大3ホップ）。
+     * 再帰的な連鎖開口部探索（最大3ホップ、分枝限定法・枝刈り付き）。
      */
     private static SoundResult searchMultiHopDetour(
             Level level,
@@ -107,7 +136,9 @@ public class SoundOcclusionHelper {
             float remainingRadius,
             int currentHop,
             List<Vec3> currentPath,
-            Set<BlockPos> visitedOpenings
+            Set<BlockPos> visitedOpenings,
+            float minStrengthThreshold,
+            BlockPos cachedShooterExit
     ) {
         // 現在位置からターゲットへ直接視線が通るか確認
         ClipContext ctx = new ClipContext(currentPos, target, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, null);
@@ -116,11 +147,11 @@ public class SoundOcclusionHelper {
         if (hit.getType() == HitResult.Type.MISS) {
             // ターゲットまで直接到達！
             double distToTarget = currentPos.distanceTo(target);
-            if (distToTarget <= remainingRadius) {
+            float remainingStrength = remainingRadius - (float) distToTarget;
+            if (distToTarget <= remainingRadius && remainingStrength > minStrengthThreshold) {
                 List<Vec3> completePath = new ArrayList<>(currentPath);
                 completePath.add(target);
                 double totalDist = calculatePathLength(completePath);
-                float remainingStrength = remainingRadius - (float) distToTarget;
                 return SoundResult.reachedMultiHop(totalDist, remainingStrength, currentHop, completePath);
             }
             return SoundResult.blocked(target);
@@ -131,12 +162,23 @@ public class SoundOcclusionHelper {
             return SoundResult.blocked(hit.getLocation());
         }
 
+        // 【最適化: 理論上限判定による早期枝刈り (Branch and Bound)】
+        // 現在地からターゲットへの直線距離を最短で移動し、あと最低1回の回折ペナルティを受けた場合の最大可能残存強度
+        double distToTarget = currentPos.distanceTo(target);
+        float theoreticalMaxRemaining = remainingRadius - (float) distToTarget - DETOUR_PENALTY;
+        if (theoreticalMaxRemaining <= minStrengthThreshold) {
+            // これ以上探索しても既存の最良解（ルートAまたは探索済みの迂回解）を上回ることは絶対にない
+            return SoundResult.blocked(hit.getLocation());
+        }
+
         // 開口部候補を探索
         List<BlockPos> openingCandidates = new ArrayList<>();
 
         // ホップ0（射撃直後）の場合、射撃者の周囲にある開いたドア（部屋の出口）を優先追加
         if (currentHop == 0) {
-            BlockPos sourceExit = findShooterRoomExit(level, BlockPos.containing(currentPos), 4);
+            BlockPos sourceExit = (cachedShooterExit != null)
+                    ? cachedShooterExit
+                    : findShooterRoomExit(level, BlockPos.containing(currentPos), 4);
             if (sourceExit != null && !visitedOpenings.contains(sourceExit)) {
                 openingCandidates.add(sourceExit);
             }
@@ -155,6 +197,7 @@ public class SoundOcclusionHelper {
         }
 
         SoundResult bestResult = SoundResult.blocked(hit.getLocation());
+        float currentThreshold = minStrengthThreshold;
 
         for (BlockPos opening : openingCandidates) {
             visitedOpenings.add(opening);
@@ -163,7 +206,10 @@ public class SoundOcclusionHelper {
 
             // 回折ペナルティ（-2m）を減算
             float nextRemaining = remainingRadius - (float) distToOpening - DETOUR_PENALTY;
-            if (nextRemaining > 0.0F) {
+
+            // 開口部を出た後の理論上限（開口部からターゲットへの直線距離）が現在の最良閾値を超えるかチェック
+            double distFromOpeningToTarget = openingExitPoint.distanceTo(target);
+            if (nextRemaining > 0.0F && (nextRemaining - (float) distFromOpeningToTarget) > currentThreshold) {
                 List<Vec3> nextPath = new ArrayList<>(currentPath);
                 nextPath.add(openingExitPoint);
 
@@ -179,11 +225,14 @@ public class SoundOcclusionHelper {
                         nextRemaining,
                         currentHop + 1,
                         nextPath,
-                        visitedOpenings
+                        visitedOpenings,
+                        currentThreshold,
+                        null
                 );
 
                 if (subResult.reached() && subResult.remainingStrength() > bestResult.remainingStrength()) {
                     bestResult = subResult;
+                    currentThreshold = Math.max(currentThreshold, subResult.remainingStrength());
                 }
             }
 
@@ -327,7 +376,7 @@ public class SoundOcclusionHelper {
     /**
      * 射撃者の周囲にある「物理的に開いているドア」や「部屋の出口」を探索する。
      */
-    private static BlockPos findShooterRoomExit(Level level, BlockPos center, int radius) {
+    public static BlockPos findShooterRoomExit(Level level, BlockPos center, int radius) {
         BlockPos nearestDoor = null;
         double nearestDistSq = Double.MAX_VALUE;
 
@@ -409,6 +458,11 @@ public class SoundOcclusionHelper {
         VoxelShape shape = state.getCollisionShape(level, pos);
         if (shape.isEmpty()) {
             return true;
+        }
+
+        // 完全な立方体（フルブロック）であれば音は通過できないため即時除外（不要なレイキャストを回避）
+        if (Block.isShapeFullBlock(shape) || shape == Shapes.block()) {
+            return false;
         }
 
         // ドアや薄い障害物の場合、ブロックの中心を東西または南北に通り抜けられるかテスト
