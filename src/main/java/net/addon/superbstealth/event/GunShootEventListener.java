@@ -92,10 +92,10 @@ public class GunShootEventListener {
 
         for (Mob mob : nearbyMobs) {
             Vec3 mobEyePos = mob.getEyePosition();
-            // 音波の遮蔽・多重貫通減衰・開口部迂回をシミュレート
+            // 音波の遮蔽・多重貫通減衰・最大3ホップの連鎖開口部迂回をシミュレート
             SoundResult result = SoundOcclusionHelper.checkSoundPropagation(level, shootPos, mobEyePos, effectiveSoundRadius);
 
-            // デバッグ視覚化 (5秒間持続するパーティクル線 & チャット通知)
+            // デバッグ視覚化 (5秒間持続する多段パーティクル線 & チャット通知)
             if (debugPlayer != null) {
                 renderDebugVisualization(level, debugPlayer, shootPos, mob, mobEyePos, result);
             }
@@ -105,7 +105,7 @@ public class GunShootEventListener {
                 continue;
             }
 
-            if (result.detoured()) {
+            if (result.hops() > 0) {
                 detouredCount++;
             }
 
@@ -150,21 +150,34 @@ public class GunShootEventListener {
 
     private void renderDebugVisualization(ServerLevel level, ServerPlayer player, Vec3 shootPos, Mob mob, Vec3 mobEyePos, SoundResult result) {
         if (result.reached()) {
-            if (result.detoured() && result.openingPos() != null) {
-                // 迂回ルート：射撃者 -> 開口部 (黄色) -> Mob (緑色)
-                Vec3 openingCenter = Vec3.atCenterOf(result.openingPos());
-                DebugParticleManager.spawnLine(level, shootPos, openingCenter, COLOR_YELLOW, DEBUG_DURATION_TICKS);
-                DebugParticleManager.spawnLine(level, openingCenter, mobEyePos, COLOR_GREEN, DEBUG_DURATION_TICKS);
-                DebugParticleManager.spawnMarker(level, openingCenter, COLOR_YELLOW, 2.0F, DEBUG_DURATION_TICKS);
+            List<Vec3> waypoints = result.waypoints();
+            if (waypoints != null && waypoints.size() >= 2) {
+                // ウェイポイント間を順次描画
+                for (int i = 0; i < waypoints.size() - 1; i++) {
+                    Vec3 from = waypoints.get(i);
+                    Vec3 to = waypoints.get(i + 1);
+                    boolean isFinalLeg = (i == waypoints.size() - 2);
+
+                    // 途中区間は黄色、最終区間は緑色
+                    Vector3f lineColor = isFinalLeg ? COLOR_GREEN : COLOR_YELLOW;
+                    DebugParticleManager.spawnLine(level, from, to, lineColor, DEBUG_DURATION_TICKS);
+
+                    // 中間開口部には黄色マーカーを設置
+                    if (!isFinalLeg) {
+                        DebugParticleManager.spawnMarker(level, to, COLOR_YELLOW, 2.0F, DEBUG_DURATION_TICKS);
+                    }
+                }
             } else {
-                // 直線到達ルート (緑色)
                 DebugParticleManager.spawnLine(level, shootPos, mobEyePos, COLOR_GREEN, DEBUG_DURATION_TICKS);
             }
 
+            String hopInfo = (result.hops() > 0)
+                    ? " §6[" + result.hops() + "回屈折迂回]"
+                    : " §2[直進]";
+
             player.sendSystemMessage(Component.literal(
                     "§7- §e" + mob.getName().getString() + "§7: §a到達 §7(残存: §f" +
-                            String.format("%.1f", result.remainingStrength()) + "m§7)" +
-                            (result.detoured() ? " §6[開口部迂回]" : " §2[直進]")
+                            String.format("%.1f", result.remainingStrength()) + "m§7)" + hopInfo
             ));
         } else {
             // 遮断ルート (赤色)

@@ -8,40 +8,48 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.VoxelShape;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 public class SoundOcclusionHelper {
 
     public static final float FLOOR_CEILING_PENALTY = 10.0F; // 床/天井スラブ貫通ペナルティ (-10m)
     public static final float WALL_PENALTY = 5.0F;           // 間仕切り壁・ドア貫通ペナルティ (-5m)
-    public static final float DETOUR_PENALTY = 4.0F;        // 回折・迂回ペナルティ (-4m)
+    public static final float DETOUR_PENALTY = 4.0F;         // 回折・迂回ペナルティ (-4m)
+    public static final int MAX_DETOUR_HOPS = 3;             // 最大屈折回数 (ホップ数)
 
     public record SoundResult(
             boolean reached,
             double effectiveDistance,
             float remainingStrength,
-            boolean detoured,
-            BlockPos openingPos,
+            int hops,
+            List<Vec3> waypoints,
             Vec3 stopPos
     ) {
         public static SoundResult blocked(Vec3 stopPos) {
-            return new SoundResult(false, 0.0, 0.0F, false, null, stopPos);
+            return new SoundResult(false, 0.0, 0.0F, 0, Collections.emptyList(), stopPos);
         }
 
-        public static SoundResult reachedDirect(double dist, float remaining) {
-            return new SoundResult(true, dist, remaining, false, null, null);
+        public static SoundResult reachedDirect(double dist, float remaining, Vec3 source, Vec3 target) {
+            List<Vec3> pts = new ArrayList<>(2);
+            pts.add(source);
+            pts.add(target);
+            return new SoundResult(true, dist, remaining, 0, pts, null);
         }
 
-        public static SoundResult reachedDetour(double dist, float remaining, BlockPos openingPos) {
-            return new SoundResult(true, dist, remaining, true, openingPos, null);
+        public static SoundResult reachedMultiHop(double dist, float remaining, int hops, List<Vec3> waypoints) {
+            return new SoundResult(true, dist, remaining, hops, waypoints, null);
         }
     }
 
     /**
      * 音源からターゲット地点への音波伝播をシミュレートする。
-     * 多重ブロック貫通減衰（面判定）、二重カウント防止、および開口部（ドア・階段）の迂回を考慮する。
+     * 最大3回までの連鎖開口部迂回（Multi-hop Waypoint Traversal）および直進多重貫通減衰を評価する。
      */
     public static SoundResult checkSoundPropagation(Level level, Vec3 source, Vec3 target, float initialRadius) {
         if (initialRadius <= 0.0F) {
@@ -53,14 +61,125 @@ public class SoundOcclusionHelper {
             return SoundResult.blocked(target);
         }
 
-        // 1. まず開口部（階段室や吹き抜け）を迂回できるルートが存在するかチェック
-        SoundResult detourResult = checkDetourRoute(level, source, target, initialRadius);
+        // 1. 直線上に障害物がないか確認
+        ClipContext directCtx = new ClipContext(source, target, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, null);
+        BlockHitResult directHit = level.clip(directCtx);
+        if (directHit.getType() == HitResult.Type.MISS) {
+            // 直線到達 (0ホップ)
+            return SoundResult.reachedDirect(straightDist, (float) (initialRadius - straightDist), source, target);
+        }
+
+        // 2. 最大3回の連鎖開口部迂回（ドア -> 階段穴 -> 敵）を探索
+        List<Vec3> initialPath = new ArrayList<>();
+        initialPath.add(source);
+        Set<BlockPos> visited = new HashSet<>();
+
+        SoundResult detourResult = searchMultiHopDetour(level, source, target, initialRadius, 0, initialPath, visited);
         if (detourResult.reached()) {
             return detourResult;
         }
 
-        // 2. 迂回できない、または迂回ルートが消音した場合は、直進の多重貫通減衰を評価
+        // 3. 迂回できない、または迂回ルートが消音した場合は、直進の多重貫通減衰を評価
         return checkMultiPenetration(level, source, target, initialRadius, straightDist);
+    }
+
+    /**
+     * 再帰的な連鎖開口部探索（最大3ホップ）。
+     */
+    private static SoundResult searchMultiHopDetour(
+            Level level,
+            Vec3 currentPos,
+            Vec3 target,
+            float remainingRadius,
+            int currentHop,
+            List<Vec3> currentPath,
+            Set<BlockPos> visitedOpenings
+    ) {
+        // 現在位置からターゲットへ直接視線が通るか確認
+        ClipContext ctx = new ClipContext(currentPos, target, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, null);
+        BlockHitResult hit = level.clip(ctx);
+
+        if (hit.getType() == HitResult.Type.MISS) {
+            // ターゲットまで直接到達！
+            double distToTarget = currentPos.distanceTo(target);
+            if (distToTarget <= remainingRadius) {
+                List<Vec3> completePath = new ArrayList<>(currentPath);
+                completePath.add(target);
+                double totalDist = calculatePathLength(completePath);
+                float remainingStrength = remainingRadius - (float) distToTarget;
+                return SoundResult.reachedMultiHop(totalDist, remainingStrength, currentHop, completePath);
+            }
+            return SoundResult.blocked(target);
+        }
+
+        // これ以上屈折できない（最大ホップ到達）なら枝刈り
+        if (currentHop >= MAX_DETOUR_HOPS) {
+            return SoundResult.blocked(hit.getLocation());
+        }
+
+        // 開口部候補を探索
+        List<BlockPos> openingCandidates = new ArrayList<>();
+
+        // ホップ0（射撃直後）の場合、射撃者の周囲にある開いたドア（部屋の出口）を優先追加
+        if (currentHop == 0) {
+            BlockPos sourceExit = findShooterRoomExit(level, BlockPos.containing(currentPos), 4);
+            if (sourceExit != null && !visitedOpenings.contains(sourceExit)) {
+                openingCandidates.add(sourceExit);
+            }
+        }
+
+        // 衝突地点周辺の開口部（階段穴や壁の穴）を追加
+        BlockPos hitPos = hit.getBlockPos();
+        Direction face = hit.getDirection();
+        BlockPos hitOpening = findNearestOpening(level, hitPos, face, 4);
+        if (hitOpening != null && !visitedOpenings.contains(hitOpening) && !openingCandidates.contains(hitOpening)) {
+            openingCandidates.add(hitOpening);
+        }
+
+        if (openingCandidates.isEmpty()) {
+            return SoundResult.blocked(hit.getLocation());
+        }
+
+        SoundResult bestResult = SoundResult.blocked(hit.getLocation());
+
+        for (BlockPos opening : openingCandidates) {
+            visitedOpenings.add(opening);
+            Vec3 openingCenter = Vec3.atCenterOf(opening);
+            double distToOpening = currentPos.distanceTo(openingCenter);
+
+            // 回折ペナルティ（-4m）を減算
+            float nextRemaining = remainingRadius - (float) distToOpening - DETOUR_PENALTY;
+            if (nextRemaining > 0.0F) {
+                List<Vec3> nextPath = new ArrayList<>(currentPath);
+                nextPath.add(openingCenter);
+
+                SoundResult subResult = searchMultiHopDetour(
+                        level,
+                        openingCenter,
+                        target,
+                        nextRemaining,
+                        currentHop + 1,
+                        nextPath,
+                        visitedOpenings
+                );
+
+                if (subResult.reached() && subResult.remainingStrength() > bestResult.remainingStrength()) {
+                    bestResult = subResult;
+                }
+            }
+
+            visitedOpenings.remove(opening);
+        }
+
+        return bestResult;
+    }
+
+    private static double calculatePathLength(List<Vec3> path) {
+        double dist = 0.0;
+        for (int i = 0; i < path.size() - 1; i++) {
+            dist += path.get(i).distanceTo(path.get(i + 1));
+        }
+        return dist;
     }
 
     /**
@@ -82,7 +201,7 @@ public class SoundOcclusionHelper {
             if (hit.getType() == HitResult.Type.MISS) {
                 // 障害物がもう存在しない
                 return (straightDist <= remainingRadius)
-                        ? SoundResult.reachedDirect(straightDist, remainingRadius - (float) straightDist)
+                        ? SoundResult.reachedDirect(straightDist, remainingRadius - (float) straightDist, source, target)
                         : SoundResult.blocked(lastHitLoc);
             }
 
@@ -113,64 +232,41 @@ public class SoundOcclusionHelper {
         }
 
         return (straightDist <= remainingRadius)
-                ? SoundResult.reachedDirect(straightDist, remainingRadius - (float) straightDist)
+                ? SoundResult.reachedDirect(straightDist, remainingRadius - (float) straightDist, source, target)
                 : SoundResult.blocked(lastHitLoc);
     }
 
     /**
-     * 射線上の最初の障害物周辺から開口部（階段室・ドア）を迂回するルートを評価。
-     * 開口部からターゲットまでの間にあるドア・壁も二重チェックする。
+     * 射撃者の周囲にある「物理的に開いているドア」や「部屋の出口」を探索する。
      */
-    private static SoundResult checkDetourRoute(Level level, Vec3 source, Vec3 target, float initialRadius) {
-        ClipContext ctx = new ClipContext(source, target, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, null);
-        BlockHitResult hit = level.clip(ctx);
+    private static BlockPos findShooterRoomExit(Level level, BlockPos center, int radius) {
+        BlockPos nearestDoor = null;
+        double nearestDistSq = Double.MAX_VALUE;
 
-        if (hit.getType() == HitResult.Type.MISS) {
-            // 直線上に障害物がないので迂回不要
-            double straightDist = source.distanceTo(target);
-            return SoundResult.reachedDirect(straightDist, (float) (initialRadius - straightDist));
-        }
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                for (int dy = -1; dy <= 2; dy++) {
+                    BlockPos pos = center.offset(dx, dy, dz);
+                    if (pos.equals(center)) continue;
 
-        BlockPos hitPos = hit.getBlockPos();
-        Direction face = hit.getDirection();
-
-        // 衝突点周辺（最大4マス）の開口部探索
-        BlockPos opening = findNearestOpening(level, hitPos, face, 4);
-        if (opening == null) {
-            return SoundResult.blocked(hit.getLocation());
-        }
-
-        Vec3 openingCenter = Vec3.atCenterOf(opening);
-        double distToOpening = source.distanceTo(openingCenter);
-        double distFromOpeningToTarget = openingCenter.distanceTo(target);
-        double totalDetourDist = distToOpening + distFromOpeningToTarget;
-
-        // 回折ペナルティ（-4m）
-        float effectiveRadius = initialRadius - DETOUR_PENALTY;
-        if (totalDetourDist > effectiveRadius) {
-            return SoundResult.blocked(openingCenter);
-        }
-
-        // 開口部からターゲットまでの間の二重遮蔽（部屋のドア等）をチェック
-        ClipContext secondCtx = new ClipContext(openingCenter, target, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, null);
-        BlockHitResult secondHit = level.clip(secondCtx);
-
-        if (secondHit.getType() == HitResult.Type.BLOCK) {
-            // 開口部からターゲットの間にも壁やドアが挟まっている場合、その減衰を適用
-            Direction secondFace = secondHit.getDirection();
-            float secondPenalty = (secondFace.getAxis() == Direction.Axis.Y) ? FLOOR_CEILING_PENALTY : WALL_PENALTY;
-            effectiveRadius -= secondPenalty;
-
-            if (totalDetourDist > effectiveRadius) {
-                return SoundResult.blocked(secondHit.getLocation());
+                    BlockState state = level.getBlockState(pos);
+                    // 空気以外のブロック（ドアやトラップドアなど）で、物理的に通過可能なものを最優先
+                    if (!state.isAir() && isPhysicallyPassable(level, pos)) {
+                        double distSq = center.distSqr(pos);
+                        if (distSq < nearestDistSq) {
+                            nearestDistSq = distSq;
+                            nearestDoor = pos;
+                        }
+                    }
+                }
             }
         }
 
-        return SoundResult.reachedDetour(totalDetourDist, (float) (effectiveRadius - totalDetourDist), opening);
+        return nearestDoor;
     }
 
     /**
-     * 衝突地点周辺で音が抜けられる開口部（空気または非衝突ブロック）を探索する。
+     * 衝突地点周辺で音が抜けられる開口部（空気または非衝突ブロック、物理的に開いたドア）を探索する。
      */
     private static BlockPos findNearestOpening(Level level, BlockPos hitPos, Direction face, int maxDist) {
         if (face.getAxis() == Direction.Axis.Y) {
@@ -179,29 +275,29 @@ public class SoundOcclusionHelper {
             for (int d = 1; d <= maxDist; d++) {
                 for (Direction dir : horizontalDirs) {
                     BlockPos checkPos = hitPos.relative(dir, d);
-                    if (isOpening(level, checkPos)) {
+                    if (isPhysicallyPassable(level, checkPos)) {
                         // 上下にも空間が抜けているか確認
                         BlockPos otherSide = (face == Direction.UP) ? checkPos.above() : checkPos.below();
-                        if (isOpening(level, otherSide)) {
+                        if (isPhysicallyPassable(level, otherSide)) {
                             return checkPos;
                         }
                     }
                 }
             }
         } else {
-            // 垂直な壁に衝突：壁面に沿った水平方向（左右）および上下を探索
+            // 垂直な壁に衝突：壁面に沿った水平方向（左右）および上下（-2〜+2）を探索
             Direction lateral = face.getClockWise();
             for (int d = 1; d <= maxDist; d++) {
-                for (int dy = -1; dy <= 1; dy++) {
+                for (int dy = -2; dy <= 2; dy++) {
                     // 右側
                     BlockPos checkPosRight = hitPos.relative(lateral, d).above(dy);
-                    if (isWallOpening(level, checkPosRight, face)) {
+                    if (isPhysicallyPassable(level, checkPosRight)) {
                         return checkPosRight;
                     }
 
                     // 左側
                     BlockPos checkPosLeft = hitPos.relative(lateral.getOpposite(), d).above(dy);
-                    if (isWallOpening(level, checkPosLeft, face)) {
+                    if (isPhysicallyPassable(level, checkPosLeft)) {
                         return checkPosLeft;
                     }
                 }
@@ -212,22 +308,35 @@ public class SoundOcclusionHelper {
     }
 
     /**
-     * 指定座標が空気または衝突判定のない空間（開口部）かどうか。
+     * そのブロックが物理的に「音が通り抜けられる開口部」かどうかを判定する。
+     * ドアの設置向き（FACING）や OPEN フラグに依存せず、
+     * ブロック中心を通る東西（X軸）または南北（Z軸）の短いローカルレイキャスト（長さ 1.2m）で直接判定する。
      */
-    private static boolean isOpening(Level level, BlockPos pos) {
+    private static boolean isPhysicallyPassable(Level level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
-        return state.isAir() || state.getCollisionShape(level, pos).isEmpty();
-    }
-
-    /**
-     * 壁の開口部判定：その位置が開口部であり、かつ壁の法線方向（前後）にも抜けているか。
-     */
-    private static boolean isWallOpening(Level level, BlockPos pos, Direction face) {
-        if (!isOpening(level, pos)) {
-            return false;
+        if (state.isAir()) {
+            return true;
         }
-        // 壁の向こう側も抜けているか確認
-        BlockPos throughPos = pos.relative(face.getOpposite());
-        return isOpening(level, throughPos);
+        VoxelShape shape = state.getCollisionShape(level, pos);
+        if (shape.isEmpty()) {
+            return true;
+        }
+
+        // ドアや薄い障害物の場合、ブロックの中心を東西または南北に通り抜けられるかテスト
+        Vec3 center = Vec3.atCenterOf(pos);
+
+        // X軸（東西）の通り抜けテスト（長さ 1.2 ブロック）
+        ClipContext ctxX = new ClipContext(center.add(-0.6, 0, 0), center.add(0.6, 0, 0), ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, null);
+        if (level.clip(ctxX).getType() == HitResult.Type.MISS) {
+            return true; // 東西に通路が開いている！
+        }
+
+        // Z軸（南北）の通り抜けテスト（長さ 1.2 ブロック）
+        ClipContext ctxZ = new ClipContext(center.add(0, 0, -0.6), center.add(0, 0, 0.6), ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, null);
+        if (level.clip(ctxZ).getType() == HitResult.Type.MISS) {
+            return true; // 南北に通路が開いている！
+        }
+
+        return false;
     }
 }
