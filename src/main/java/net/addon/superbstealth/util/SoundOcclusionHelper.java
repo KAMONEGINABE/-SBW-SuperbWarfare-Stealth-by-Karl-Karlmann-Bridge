@@ -167,9 +167,10 @@ public class SoundOcclusionHelper {
                 List<Vec3> nextPath = new ArrayList<>(currentPath);
                 nextPath.add(openingExitPoint);
 
-                // 開口部出口境界からターゲット方向にわずかに進めた点から次区間のレイキャストを開始
+                // 開口部ブロック（100%空気）の内側スレスレ（境界の手前2cm）から次区間のレイキャストを開始
+                // これにより、上のブロックが逆向き階段やハーフブロック等の場合でも開始点の自己埋没（Self-Hit）を防止
                 Vec3 rayDir = target.subtract(openingExitPoint).normalize();
-                Vec3 nextStartPos = openingExitPoint.add(rayDir.scale(0.02));
+                Vec3 nextStartPos = openingExitPoint.subtract(rayDir.scale(0.02));
 
                 SoundResult subResult = searchMultiHopDetour(
                         level,
@@ -246,8 +247,8 @@ public class SoundOcclusionHelper {
 
     /**
      * 直線上のすべての壁・床を貫通走査し、累積減衰を計算する。
-     * 1つのブロックで入る面と出る面の両方をカウントしないよう、BlockPos単位で管理。
-     * 入射面だけでなく出射面（抜ける面）も判定し、上面/下面から抜ける場合は床減衰（-12m）を適用。
+     * 出口面遷移（Exit Point Warp）により、衝突ブロックの反対側へ即時ワープして通過厚みを正確に測定。
+     * 通過した厚み（実距離）に応じた比例減衰を適用し、壁の縦貫通すり抜けを完全防止する。
      */
     private static SoundResult checkMultiPenetration(Level level, Vec3 source, Vec3 target, float initialRadius, double straightDist) {
         float remainingRadius = initialRadius;
@@ -255,43 +256,46 @@ public class SoundOcclusionHelper {
         Vec3 rayDir = target.subtract(source).normalize();
         Set<BlockPos> traversedBlocks = new HashSet<>();
         Vec3 lastHitLoc = source;
-        int maxPenetrations = 8; // 安全リミット（最大8枚貫通まで）
+        int maxPenetrations = 8; // 安全リミット（最大8ブロック貫通まで）
+        boolean reachedTarget = false;
 
         while (maxPenetrations-- > 0) {
             ClipContext ctx = new ClipContext(currentStart, target, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, null);
             BlockHitResult hit = level.clip(ctx);
 
             if (hit.getType() == HitResult.Type.MISS) {
-                // 障害物がもう存在しない
-                return (straightDist <= remainingRadius)
-                        ? SoundResult.reachedDirect(straightDist, remainingRadius - (float) straightDist, source, target)
-                        : SoundResult.blocked(lastHitLoc);
+                // ターゲットまでの間に障害物がもう存在しない（完全に空間へ抜け切った）
+                reachedTarget = true;
+                break;
             }
 
             BlockPos hitPos = hit.getBlockPos();
             Direction face = hit.getDirection();
-            lastHitLoc = hit.getLocation();
+            Vec3 entryPt = hit.getLocation();
+            lastHitLoc = entryPt;
+
+            // 衝突ブロックの境界箱（AABB）から出口点（exitPt）を算出
+            AABB box = new AABB(hitPos);
+            Optional<Vec3> exit = box.clip(entryPt.add(rayDir.scale(0.001)), target);
+            Vec3 exitPt = exit.orElse(entryPt.add(rayDir.scale(1.0)));
 
             // ユニークブロック判定（1ブロックにつき1回のみ減衰）
             if (!traversedBlocks.contains(hitPos)) {
                 traversedBlocks.add(hitPos);
                 boolean isFloorCeiling = (face.getAxis() == Direction.Axis.Y);
 
-                // 入射面が水平面であっても、斜めレイで上面または下面から抜ける場合は床スラブ貫通とみなす
-                if (!isFloorCeiling && rayDir.y != 0.0) {
-                    AABB box = new AABB(hitPos);
-                    Optional<Vec3> exit = box.clip(hit.getLocation().add(rayDir.scale(0.001)), target);
-                    if (exit.isPresent()) {
-                        Vec3 exitPt = exit.get();
-                        double topY = hitPos.getY() + 1.0;
-                        double bottomY = hitPos.getY();
-                        if (Math.abs(exitPt.y - topY) < 0.001 || Math.abs(exitPt.y - bottomY) < 0.001) {
-                            isFloorCeiling = true;
-                        }
-                    }
+                // 出射面が上面または下面である場合も床スラブ貫通とみなす
+                double topY = hitPos.getY() + 1.0;
+                double bottomY = hitPos.getY();
+                if (Math.abs(exitPt.y - topY) < 0.001 || Math.abs(exitPt.y - bottomY) < 0.001) {
+                    isFloorCeiling = true;
                 }
 
-                float penalty = isFloorCeiling ? FLOOR_CEILING_PENALTY : WALL_PENALTY;
+                float basePenalty = isFloorCeiling ? FLOOR_CEILING_PENALTY : WALL_PENALTY;
+
+                // 通過した厚み（実距離）に応じた比例減衰（最小でも 1.0m 分、斜めや縦貫通なら距離分）
+                double thickness = Math.max(1.0, entryPt.distanceTo(exitPt));
+                float penalty = (float) (basePenalty * thickness);
                 remainingRadius -= penalty;
 
                 // 減衰しきった、または残存半径が直線距離を下回ったら即座に消音
@@ -300,13 +304,19 @@ public class SoundOcclusionHelper {
                 }
             }
 
-            // 次のレイの開始点を衝突点のわずか先（0.05ブロック先）に進める
-            currentStart = hit.getLocation().add(rayDir.scale(0.05));
+            // 出口境界のわずか先（0.01m先）へ一気にワープして次区間のレイを開始
+            currentStart = exitPt.add(rayDir.scale(0.01));
 
             // ターゲットを通り過ぎたらループ終了
             if (currentStart.distanceTo(source) >= straightDist) {
+                reachedTarget = true;
                 break;
             }
+        }
+
+        // ループ上限に達しても空間へ抜け切れていない（障害物の中にいる）場合は確実に遮断
+        if (!reachedTarget) {
+            return SoundResult.blocked(lastHitLoc);
         }
 
         return (straightDist <= remainingRadius)
@@ -349,16 +359,14 @@ public class SoundOcclusionHelper {
     private static BlockPos findNearestOpening(Level level, BlockPos hitPos, Direction face, int maxDist) {
         if (face.getAxis() == Direction.Axis.Y) {
             // 床または天井に衝突：水平4方向（東西南北）に開口部（階段吹き抜け、床の穴）を探索
+            // 大雑把な上下ブロックの事前フィルタは行わず、穴自体の空気判定のみを行い、
+            // 空間が本当に抜けているかは次ホップの高精度なバニラレイキャスト（level.clip）に委譲する。
             Direction[] horizontalDirs = {Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST};
             for (int d = 1; d <= maxDist; d++) {
                 for (Direction dir : horizontalDirs) {
                     BlockPos checkPos = hitPos.relative(dir, d);
                     if (isPhysicallyPassable(level, checkPos)) {
-                        // 上下にも空間が抜けているか確認
-                        BlockPos otherSide = (face == Direction.UP) ? checkPos.above() : checkPos.below();
-                        if (isPhysicallyPassable(level, otherSide)) {
-                            return checkPos;
-                        }
+                        return checkPos;
                     }
                 }
             }
@@ -379,6 +387,11 @@ public class SoundOcclusionHelper {
                         return checkPosLeft;
                     }
                 }
+            }
+
+            // 階段ブロック等に水平衝突した場合、その真上が空気であれば階段空間として開口部とする
+            if (isPhysicallyPassable(level, hitPos.above())) {
+                return hitPos.above();
             }
         }
 
