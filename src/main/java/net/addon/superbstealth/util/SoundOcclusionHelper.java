@@ -1,5 +1,6 @@
 package net.addon.superbstealth.util;
 
+import net.addon.superbstealth.config.SuperbStealthConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.ClipContext;
@@ -22,10 +23,30 @@ import java.util.Set;
 
 public class SoundOcclusionHelper {
 
-    public static final float FLOOR_CEILING_PENALTY = 12.0F; // 床/天井スラブ貫通ペナルティ (-12m)
-    public static final float WALL_PENALTY = 8.0F;           // 間仕切り壁・ドア貫通ペナルティ (-8m)
-    public static final float DETOUR_PENALTY = 2.0F;         // 回折・迂回ペナルティ (-2m)
-    public static final int MAX_DETOUR_HOPS = 3;             // 最大屈折回数 (ホップ数)
+    public static final float DEFAULT_FLOOR_CEILING_PENALTY = 12.0F; // 床/天井スラブ貫通ペナルティ (-12m)
+    public static final float DEFAULT_WALL_PENALTY = 8.0F;           // 間仕切り壁・ドア貫通ペナルティ (-8m)
+    public static final float DEFAULT_DETOUR_PENALTY = 2.0F;         // 回折・迂回ペナルティ (-2m)
+    public static final int DEFAULT_MAX_DETOUR_HOPS = 3;             // 最大屈折回数 (ホップ数)
+
+    public static float getFloorCeilingPenalty() {
+        return SuperbStealthConfig.CONFIG.floorCeilingPenalty.get().floatValue();
+    }
+
+    public static float getWallPenalty() {
+        return SuperbStealthConfig.CONFIG.wallPenalty.get().floatValue();
+    }
+
+    public static float getDetourPenalty() {
+        return SuperbStealthConfig.CONFIG.detourPenalty.get().floatValue();
+    }
+
+    public static int getMaxDetourHops() {
+        return SuperbStealthConfig.CONFIG.maxDetourHops.get();
+    }
+
+    public static int getMaxPenetrations() {
+        return SuperbStealthConfig.CONFIG.maxPenetrations.get();
+    }
 
     public record SoundResult(
             boolean reached,
@@ -90,12 +111,13 @@ public class SoundOcclusionHelper {
         float minStrengthThreshold = penResult.reached() ? penResult.remainingStrength() : 0.0F;
 
         // 【最適化: 理論上限によるルートB完全スキップ判定】
-        // 迂回には最低でも 1回のホップ（-2m）と直線以上の移動距離が必要となるため、
-        // ルートAの貫通減衰ペナルティが回折ペナルティ（DETOUR_PENALTY: 2.0m）以下であれば、
+        // 迂回には最低でも 1回のホップ（回折ペナルティ）と直線以上の移動距離が必要となるため、
+        // ルートAの貫通減衰ペナルティが回折ペナルティ以下であれば、
         // 物理的にルートBがルートAを上回ることは絶対にあり得ない。
+        float detourPenalty = getDetourPenalty();
         if (penResult.reached()) {
             float totalPenPenalty = (float) (initialRadius - straightDist) - penResult.remainingStrength();
-            if (totalPenPenalty <= DETOUR_PENALTY) {
+            if (totalPenPenalty <= detourPenalty) {
                 return penResult;
             }
         }
@@ -158,14 +180,16 @@ public class SoundOcclusionHelper {
         }
 
         // これ以上屈折できない（最大ホップ到達）なら枝刈り
-        if (currentHop >= MAX_DETOUR_HOPS) {
+        if (currentHop >= getMaxDetourHops()) {
             return SoundResult.blocked(hit.getLocation());
         }
+
+        float detourPenalty = getDetourPenalty();
 
         // 【最適化: 理論上限判定による早期枝刈り (Branch and Bound)】
         // 現在地からターゲットへの直線距離を最短で移動し、あと最低1回の回折ペナルティを受けた場合の最大可能残存強度
         double distToTarget = currentPos.distanceTo(target);
-        float theoreticalMaxRemaining = remainingRadius - (float) distToTarget - DETOUR_PENALTY;
+        float theoreticalMaxRemaining = remainingRadius - (float) distToTarget - detourPenalty;
         if (theoreticalMaxRemaining <= minStrengthThreshold) {
             // これ以上探索しても既存の最良解（ルートAまたは探索済みの迂回解）を上回ることは絶対にない
             return SoundResult.blocked(hit.getLocation());
@@ -204,8 +228,8 @@ public class SoundOcclusionHelper {
             Vec3 openingExitPoint = calculateOpeningExitPoint(level, opening, face, target);
             double distToOpening = currentPos.distanceTo(openingExitPoint);
 
-            // 回折ペナルティ（-2m）を減算
-            float nextRemaining = remainingRadius - (float) distToOpening - DETOUR_PENALTY;
+            // 回折ペナルティを減算
+            float nextRemaining = remainingRadius - (float) distToOpening - detourPenalty;
 
             // 開口部を出た後の理論上限（開口部からターゲットへの直線距離）が現在の最良閾値を超えるかチェック
             double distFromOpeningToTarget = openingExitPoint.distanceTo(target);
@@ -305,7 +329,7 @@ public class SoundOcclusionHelper {
         Vec3 rayDir = target.subtract(source).normalize();
         Set<BlockPos> traversedBlocks = new HashSet<>();
         Vec3 lastHitLoc = source;
-        int maxPenetrations = 8; // 安全リミット（最大8ブロック貫通まで）
+        int maxPenetrations = getMaxPenetrations(); // 安全リミット
         boolean reachedTarget = false;
 
         while (maxPenetrations-- > 0) {
@@ -340,7 +364,7 @@ public class SoundOcclusionHelper {
                     isFloorCeiling = true;
                 }
 
-                float basePenalty = isFloorCeiling ? FLOOR_CEILING_PENALTY : WALL_PENALTY;
+                float basePenalty = isFloorCeiling ? getFloorCeilingPenalty() : getWallPenalty();
 
                 // 通過した厚み（実距離）に応じた比例減衰（最小でも 1.0m 分、斜めや縦貫通なら距離分）
                 double thickness = Math.max(1.0, entryPt.distanceTo(exitPt));

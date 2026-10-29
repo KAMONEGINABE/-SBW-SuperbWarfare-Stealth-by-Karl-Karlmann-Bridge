@@ -5,6 +5,7 @@ import com.atsuishio.superbwarfare.data.gun.GunData;
 import com.atsuishio.superbwarfare.data.gun.GunProp;
 import com.atsuishio.superbwarfare.data.gun.value.AttachmentType;
 import net.addon.superbstealth.SuperbStealthMod;
+import net.addon.superbstealth.config.SuperbStealthConfig;
 import net.addon.superbstealth.stealth.StealthAlertHandler;
 import net.addon.superbstealth.util.DebugParticleManager;
 import net.addon.superbstealth.util.SoundOcclusionHelper;
@@ -57,11 +58,19 @@ public class GunShootEventListener {
 
         // 2. 有効音波半径の算出
         Double configuredRadius = data.get(GunProp.SOUND_RADIUS);
-        double baseVolume = (configuredRadius != null && configuredRadius > 0.0) ? configuredRadius : 14.0;
+        double fallbackVolume = SuperbStealthConfig.CONFIG.fallbackGunVolume.get();
+        double baseVolume = (configuredRadius != null && configuredRadius > 0.0) ? configuredRadius : fallbackVolume;
         float baseSoundRadius = (float) (baseVolume * 0.4 * 16.0);
 
-        // サプレッサー装着時は音波半径を 1/4 (AK47で約 22.4m, MP5で約 17.6m, 拳銃で約 11.2m) に除算
-        float effectiveSoundRadius = isSuppressed ? Math.max(8.0F, baseSoundRadius / 4.0F) : baseSoundRadius;
+        // サプレッサー装着時は音波半径を乗算倍率 (デフォルト 0.25 = 25%) で縮小 (下限 suppressorMinRadius)
+        float effectiveSoundRadius;
+        if (isSuppressed) {
+            float multiplier = SuperbStealthConfig.CONFIG.suppressorRadiusMultiplier.get().floatValue();
+            float minRadius = SuperbStealthConfig.CONFIG.suppressorMinRadius.get().floatValue();
+            effectiveSoundRadius = Math.max(minRadius, baseSoundRadius * multiplier);
+        } else {
+            effectiveSoundRadius = baseSoundRadius;
+        }
 
         // 3. 周辺 Mob の走査
         AABB scanBox = new AABB(shootPos, shootPos).inflate(effectiveSoundRadius);
@@ -81,7 +90,8 @@ public class GunShootEventListener {
         long gameTime = level.getGameTime();
 
         // 射撃地点周辺の部屋出口（開いたドア等）をMobループ前に1度だけ事前解決してキャッシュ
-        BlockPos cachedShooterExit = SoundOcclusionHelper.findShooterRoomExit(level, BlockPos.containing(shootPos), 4);
+        int scanRadius = SuperbStealthConfig.CONFIG.shooterExitScanRadius.get();
+        BlockPos cachedShooterExit = SoundOcclusionHelper.findShooterRoomExit(level, BlockPos.containing(shootPos), scanRadius);
 
         ServerPlayer debugPlayer = (shooter instanceof ServerPlayer sp && SuperbStealthMod.DEBUG_PLAYERS.contains(sp.getUUID())) ? sp : null;
         if (debugPlayer != null) {
