@@ -23,8 +23,7 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import java.util.List;
 
 /**
- * SuperbWarfare の発砲イベント (ShootEvent.Post) を購読し、
- * 音響物理シミュレーション・診断可視化・Stealth Mod への通知パイプラインを統括するリスナ。
+ * Handles gun firing events, calculating sound occlusion and alerting nearby mobs.
  */
 public class GunShootEventListener {
 
@@ -46,23 +45,22 @@ public class GunShootEventListener {
             shootPos = shooter != null ? shooter.position() : Vec3.ZERO;
         }
 
-        // サプレッサー装着判定 (BARREL == 2)
         boolean isSuppressed = data.attachment.get(AttachmentType.BARREL) == 2;
 
-        // 1. バニラ GameEvent 発行
-        // 【重要】サプレッサー装着時は、バニラ GameEvent の壁無視 16m 貫通による上階 Mob の誤爆知を防ぐため発行を停止。
-        // 非サプレッサー時のみ、ウォーデンおよび Stealth HUD 音波メーター連動用として発行する。
+        // Vanilla GameEvents pierce through walls ignoring obstacles up to 16 blocks.
+        // Suppressed shots suppress this event entirely to prevent false alerts through floors/walls.
+        // Unsuppressed shots still emit it for Wardens and Sculk sensors; mob AI alerts are handled directly below.
         if (!isSuppressed) {
             level.gameEvent(shooter, GameEvent.PROJECTILE_SHOOT, shootPos);
         }
 
-        // 2. 有効音波半径の算出
+        // SuperbWarfare SOUND_RADIUS is volume, not distance in meters.
+        // Audible distance in Minecraft physics is volume * 0.4 * 16m, allowing detection dozens of meters away.
         Double configuredRadius = data.get(GunProp.SOUND_RADIUS);
         double fallbackVolume = SuperbStealthConfig.CONFIG.fallbackGunVolume.get();
         double baseVolume = (configuredRadius != null && configuredRadius > 0.0) ? configuredRadius : fallbackVolume;
         float baseSoundRadius = (float) (baseVolume * 0.4 * 16.0);
 
-        // サプレッサー装着時は音波半径を乗算倍率 (デフォルト 0.25 = 25%) で縮小 (下限 suppressorMinRadius)
         float effectiveSoundRadius;
         if (isSuppressed) {
             float multiplier = SuperbStealthConfig.CONFIG.suppressorRadiusMultiplier.get().floatValue();
@@ -72,7 +70,6 @@ public class GunShootEventListener {
             effectiveSoundRadius = baseSoundRadius;
         }
 
-        // 3. 周辺 Mob の走査
         AABB scanBox = new AABB(shootPos, shootPos).inflate(effectiveSoundRadius);
         List<Mob> nearbyMobs = level.getEntitiesOfClass(Mob.class, scanBox, mob -> {
             if (mob == null || !mob.isAlive()) {
@@ -89,7 +86,6 @@ public class GunShootEventListener {
         int detouredCount = 0;
         long gameTime = level.getGameTime();
 
-        // 射撃地点周辺の部屋出口（開いたドア等）をMobループ前に1度だけ事前解決してキャッシュ
         int scanRadius = SuperbStealthConfig.CONFIG.shooterExitScanRadius.get();
         BlockPos cachedShooterExit = SoundOcclusionHelper.findShooterRoomExit(level, BlockPos.containing(shootPos), scanRadius);
 
@@ -98,18 +94,14 @@ public class GunShootEventListener {
             DebugParticleManager.sendShotHeader(debugPlayer, effectiveSoundRadius, isSuppressed);
         }
 
-        // 4. 音波物理計算・診断可視化・ステルス警戒度適用のパイプライン処理
         for (Mob mob : nearbyMobs) {
             Vec3 mobEyePos = mob.getEyePosition();
-            // 音波の遮蔽・多重貫通減衰・最大3ホップの連鎖開口部迂回（分枝限定法・事前キャッシュ付き）をシミュレート
             SoundResult result = SoundOcclusionHelper.checkSoundPropagation(level, shootPos, mobEyePos, effectiveSoundRadius, cachedShooterExit);
 
-            // 診断・デバッグ視覚化 (有効時のみ)
             if (debugPlayer != null) {
                 DebugParticleManager.renderDebugVisualization(level, debugPlayer, shootPos, mob, mobEyePos, result);
             }
 
-            // Stealth Mod Capability への通知・警戒度更新
             if (StealthAlertHandler.alertMob(mob, shootPos, result, isSuppressed, effectiveSoundRadius, gameTime)) {
                 notifiedCount++;
             } else if (!result.reached()) {
