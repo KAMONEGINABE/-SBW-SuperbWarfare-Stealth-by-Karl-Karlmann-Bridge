@@ -6,6 +6,7 @@ import com.atsuishio.superbwarfare.data.gun.GunProp;
 import com.atsuishio.superbwarfare.data.gun.value.AttachmentType;
 import net.addon.superbstealth.SuperbStealthMod;
 import net.addon.superbstealth.config.SuperbStealthConfig;
+import net.addon.superbstealth.sculk.SculkVibrationHandler;
 import net.addon.superbstealth.stealth.StealthAlertHandler;
 import net.addon.superbstealth.util.DebugParticleManager;
 import net.addon.superbstealth.util.SoundOcclusionHelper;
@@ -18,6 +19,8 @@ import net.minecraft.world.entity.Mob;
 import net.minecraft.world.level.gameevent.GameEvent;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.event.VanillaGameEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 
 import java.util.List;
@@ -47,12 +50,8 @@ public class GunShootEventListener {
 
         boolean isSuppressed = data.attachment.get(AttachmentType.BARREL) == 2;
 
-        // Vanilla GameEvents pierce through walls ignoring obstacles up to 16 blocks.
-        // Suppressed shots suppress this event entirely to prevent false alerts through floors/walls.
-        // Unsuppressed shots still emit it for Wardens and Sculk sensors; mob AI alerts are handled directly below.
-        if (!isSuppressed) {
-            level.gameEvent(shooter, GameEvent.PROJECTILE_SHOOT, shootPos);
-        }
+        // Post directly to Forge event bus to trigger Stealth Mod HUD noise meter without alerting vanilla 16m radius
+        MinecraftForge.EVENT_BUS.post(new VanillaGameEvent(level, GameEvent.PROJECTILE_SHOOT, shootPos, GameEvent.Context.of(shooter)));
 
         // SuperbWarfare SOUND_RADIUS is volume, not distance in meters.
         // Audible distance in Minecraft physics is volume * 0.4 * 16m, allowing detection dozens of meters away.
@@ -102,7 +101,7 @@ public class GunShootEventListener {
                 DebugParticleManager.renderDebugVisualization(level, debugPlayer, shootPos, mob, mobEyePos, result);
             }
 
-            if (StealthAlertHandler.alertMob(mob, shootPos, result, isSuppressed, effectiveSoundRadius, gameTime)) {
+            if (StealthAlertHandler.alertMob(shooter, mob, shootPos, result, isSuppressed, effectiveSoundRadius, gameTime)) {
                 notifiedCount++;
             } else if (!result.reached()) {
                 blockedCount++;
@@ -112,6 +111,8 @@ public class GunShootEventListener {
                 detouredCount++;
             }
         }
+
+        SculkVibrationHandler.triggerSculkSensors(level, shootPos, effectiveSoundRadius, isSuppressed, shooter, cachedShooterExit);
 
         SuperbStealthMod.LOGGER.debug(
                 "Gunshot at [{}, {}, {}] (Suppressed: {}, Radius: {}m). Notified: {}, Blocked: {}, Detoured: {}",

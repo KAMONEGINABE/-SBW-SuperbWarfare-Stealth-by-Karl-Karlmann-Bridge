@@ -32,6 +32,10 @@ public class SuperbStealthConfig {
     public final ForgeConfigSpec.DoubleValue soundPriorityMin;
     public final ForgeConfigSpec.DoubleValue soundPriorityMax;
 
+    // --- [sculk] ---
+    public final ForgeConfigSpec.IntValue suppressedSculkFrequency;
+    public final ForgeConfigSpec.IntValue unsuppressedSculkFrequency;
+
     static {
         Pair<SuperbStealthConfig, ForgeConfigSpec> pair = new ForgeConfigSpec.Builder().configure(SuperbStealthConfig::new);
         CONFIG = pair.getLeft();
@@ -130,6 +134,21 @@ public class SuperbStealthConfig {
         soundPriorityMax = builder
                 .comment("Priority assigned to the gunshot position in the mob's memory at point-blank range.")
                 .defineInRange("soundPriorityMax", 15.0, 0.0, 100.0);
+
+        builder.pop();
+
+        // [sculk]
+        builder.comment("Sculk Sensor and Vibration Integration Settings").push("sculk");
+
+        suppressedSculkFrequency = builder
+                .comment("Vibration frequency (and resulting redstone comparator output strength 1-15) triggered on sculk sensors by suppressed gunshots.",
+                        "Default 10 corresponds to vanilla projectile shooting frequency.")
+                .defineInRange("suppressedSculkFrequency", 10, 1, 15);
+
+        unsuppressedSculkFrequency = builder
+                .comment("Vibration frequency (and resulting redstone comparator output strength 1-15) triggered on sculk sensors by unsuppressed gunshots.",
+                        "Default 15 corresponds to maximum loudness (vanilla explosion frequency).")
+                .defineInRange("unsuppressedSculkFrequency", 15, 1, 15);
 
         builder.pop();
     }
