@@ -83,7 +83,8 @@ Settings are located in `config/superbstealth-common.toml`:
 ### 6. Contributing & Issues
 
 - **Bug Reports**: Please submit an Issue detailing your reproduction steps, a crash log (`crash-reports/` or `logs/latest.log`), and a mod list.
-- **Pull Requests**: Contributions and improvements are welcome! Please note that as a casual personal project, complex requests or fixes may take time.
+- **Feature Requests**: Ideas and suggestions are also welcome. Implementation is not guaranteed, but if an idea sounds fun and fits my own playthrough, I might build it.
+- **Pull Requests**: Contributions and improvements are welcome! Please note that as a casual personal project, complex fixes may take time.
 
 ### 7. Credits & License
 
@@ -100,7 +101,7 @@ Settings are located in `config/superbstealth-common.toml`:
 本 Mod は、SuperbWarfare の発砲イベントを受信し、軽量な音響遮蔽・回折モデル（壁貫通減衰 ＋ ドア迂回探索）を通じて、Stealth Mod の Mob、ウォーデン、スカルクセンサーへ直接警戒度や振動を伝達する非公式アドオンです。
 
 > **開発スタンスについて**:  
-> 個人用 Modpack 向けに制作した趣味のアドオンを現状有姿（As-is）でお裾分け公開しているものです。コードは主に AI の支援を借りて作成しています。全体の設計や各クラスの役割は把握していますが、細かい構文の深部まで全て自力で把握しているわけではありません。ゲーム内でのテストを重ねており、個人環境では安定して動作しています。
+> 個人用 Modpack 向けに制作した趣味のアドオンを現状有姿でお裾分け公開しているものです。コードは主に AI の支援を借りて作成しています。全体の設計や各クラスの役割は把握していますが、細かい構文の深部まで全て自力で把握しているわけではありません。ゲーム内でのテストを重ねており、個人環境では安定して動作しています。
 
 ### 2. 前提条件（Dependencies）
 
@@ -164,6 +165,7 @@ Settings are located in `config/superbstealth-common.toml`:
 ### 6. Issue・コントリビューション方針
 
 - **バグ報告**: 再現手順、クラッシュログ（`crash-reports/` または `logs/latest.log`）、導入 Mod 一覧を添えて Issue を作成してください。
+- **機能提案（Feature Requests）**: アイデアや新機能の提案も歓迎します。必ず実装するお約束はできませんが、面白そうなアイデアや作りたくなった/遊んでみたくなった機能は、時間がとれた際に作るかもしれません。
 - **プルリクエスト (PR)**: 改善提案や修正 PR は歓迎します。個人開発のため、複雑な修正対応にはお時間をいただく場合があります。
 
 ### 7. クレジット & ライセンス
