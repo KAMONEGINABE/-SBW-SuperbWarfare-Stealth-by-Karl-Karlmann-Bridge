@@ -31,19 +31,14 @@ This mod hooks into SuperbWarfare gun firing events, routes sound through a ligh
 
 ### 3. Building from Source
 
-This project uses Gradle with the Java Toolchain (configured for Java 17).
+This project uses Gradle with the Java Toolchain (configured for Java 17). Dependencies (SuperbWarfare and Stealth) are automatically resolved and deobfuscated via CurseMaven.
 
 1. **Clone the repository**:
    ```bash
    git clone https://github.com/<owner>/superbstealth.git
    cd superbstealth
    ```
-2. **Place third-party dependencies**:  
-   Due to distribution licenses, third-party mod binaries are not committed to this repository. Download and place the following jars into the `libs/` folder:
-   - `superbwarfare-0.8.9.2.jar`
-   - `stealth-1.1.100.jar`
-   - `kotlinforforge-4.12.0.jar`
-3. **Build the mod**:
+2. **Build the mod**:
    - Windows:
      ```cmd
      .\gradlew.bat build
@@ -52,7 +47,7 @@ This project uses Gradle with the Java Toolchain (configured for Java 17).
      ```bash
      ./gradlew build
      ```
-4. The compiled jar will be generated in `build/libs/superbstealth-<version>.jar`.
+3. The compiled jar will be generated in `build/libs/superbstealth-<version>.jar`.
 
 ### 4. Architecture & Technical Overview
 
@@ -113,19 +108,14 @@ Settings are located in `config/superbstealth-common.toml`:
 
 ### 3. ソースコードからのビルド手順
 
-本プロジェクトは Gradle Java Toolchain（Java 17）を使用しています。
+本プロジェクトは Gradle Java Toolchain（Java 17）を使用しています。前提 Mod（SuperbWarfare および Stealth）は CurseMaven を通じて自動的にダウンロードおよび難読化解除（deobf）されます。
 
 1. **リポジトリのクローン**:
    ```bash
    git clone https://github.com/<owner>/superbstealth.git
    cd superbstealth
    ```
-2. **前提 Mod Jar の配置**:  
-   再配布規約を遵守するため、他作者様の Mod バイナリはリポジトリに含まれていません。各自で以下の Jar をダウンロードし、`libs/` フォルダ内に配置してください：
-   - `superbwarfare-0.8.9.2.jar`
-   - `stealth-1.1.100.jar`
-   - `kotlinforforge-4.12.0.jar`
-3. **ビルド実行**:
+2. **ビルド実行**:
    - Windows:
      ```cmd
      .\gradlew.bat build
@@ -134,7 +124,7 @@ Settings are located in `config/superbstealth-common.toml`:
      ```bash
      ./gradlew build
      ```
-4. ビルドされた Jar は `build/libs/superbstealth-<version>.jar` に生成されます。
+3. ビルドされた Jar は `build/libs/superbstealth-<version>.jar` に生成されます。
 
 ### 4. 技術概要・アーキテクチャ
 
