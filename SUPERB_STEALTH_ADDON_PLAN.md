@@ -1,44 +1,23 @@
-# SuperbWarfare × Stealth by Karl Karlmann 連携アドオン 開発計画書
+# SuperbWarfare × Stealth by Karl Karlmann 連携アドオン 技術仕様書・設計書
 
 ## 1. プロジェクト概要
 
 ### 1.1 目的
-Minecraft 1.20.1 (Forge) 環境において、近代火器 Mod **「SuperbWarfare」** と ステルス・知覚拡張 Mod **「Stealth by Karl Karlmann」** を連携させる独立アドオン Mod を新規開発する。
+Minecraft 1.20.1 (Forge) 環境において、近代火器 Mod **「SuperbWarfare」** と ステルス・知覚拡張 Mod **「Stealth by Karl Karlmann」** を連携させ、現実的な音響伝播と隠密戦術を実現するアドオン Mod。
 
-### 1.2 背景と現状の課題
-- **課題 1: 銃声にウォーデンや Stealth の Mob が反応しない**
-  - SuperbWarfare の銃器は、発砲時にサウンドパケット（効果音）を直接クライアントに送信しているのみで、Minecraft の振動感知の要である `GameEvent` を一切発行していない。
-  - 弾丸（`FastThrowableProjectile`）も独自弾道計算のため `super.baseTick()` を呼んでおり、バニラ弾丸の `PROJECTILE_SHOOT`（発射振動）もスキップされている。
-- **課題 2: サプレッサーがゲームメカニクスに影響を与えない**
-  - サプレッサー（消音器）を装着しても、再生される発砲音の音声ファイルが切り替わるだけで、敵の索敵や隠密判定に対するゲーム的な恩恵がない。
-  - また、一般のシューターに見られる「消音の代わりに連射速度や弾速が下がる」といったトレードオフ（バランス調整）も存在しない。
-- **課題 3: 単純なコンフィグ調整の破綻**
-  - Stealth Mod 側の検知半径（`base_hearing_range`）を広げると、銃声だけでなく「プレイヤーの普通の足音」まで 60m〜100m 先の Mob に丸聞こえになってしまい、ステルスゲームとして崩壊する。
-
----
-
-## 2. 内部仕様・調査結果の総括
-
-### 2.1 SuperbWarfare 内部仕様
-| 要素 | 実装場所 / クラス | 仕様詳細 |
-| :--- | :--- | :--- |
-| **発砲イベント** | `com.atsuishio.superbwarfare.api.event.ShootEvent.Post` | Forge EventBus に公開されている公式イベント。射撃者（`shooter`）、ワールド（`level`）、銃データ（`data: GunData`）、発砲座標（`shootPosition`）を完全取得可能。 |
-| **サプレッサー判定** | `GunData.attachment.get(AttachmentType.BARREL)` | 戻り値が `2` の場合、バレルアタッチメントにサプレッサーが装着されている。全銃器共通。 |
-| **銃声半径** | `data.get(GunProp.SOUND_RADIUS)` | 各銃器固有の銃声伝播半径（スナイパーは広く、ハンドガンは狭い）。 |
-| **性能補正機構** | `GunItem.modifyProperty(PMC<GunData, DefaultGunData>)` | 各フレーム/キャッシュ計算時にステータスを動的算出。`getCustomRPM(data)` 等をフック可能。 |
-
-### 2.2 Stealth by Karl Karlmann 内部仕様
-| 要素 | 実装場所 / クラス | 仕様詳細 |
-| :--- | :--- | :--- |
-| **検知半径拡張** | `MixinGameEventDispatcher`, `MixinMob` | バニラの 16m 制限を `@Redirect` し、`StealthConfig.COMMON.BASE_HEARING_RANGE`（標準 25m、最大 128m）まで拡張済み。 |
-| **Mob 聴覚状態** | `StealthStateProvider.STEALTH_CAPABILITY` (`IStealthState`) | 各 Mob に付与される Capability。怪しい音の座標（`setSuspiciousLocation`）や警戒度（`addAlertLevel`）を直接操作可能。 |
-| **警戒度遷移** | `DistractionGoal`, `MixinMob` | 警戒度 `0.2` 以上で音源を注視（Phase 1）、`0.45` 以上で音源へ移動調査（Phase 2）。村人などの `TIMID` Mob はパニック逃走。 |
-| **Escalation イベント** | `StealthConfig.COMMON.ESCALATION_EVENTS` | `entity_damage`, `explode` 等。1回の振動で警戒度が `+0.3`（通常は `+0.15`）増加し、上限が `1.0`（最大警戒・戦闘態勢）まで解放される。 |
-| **距離減衰の特性** | `MixinMob (180〜188行目)` | 距離によるペナルティが最大でも `0.8` しか引かれないため、`base_hearing_range` を広げすぎると足音（Priority 5.0）まで遠距離に届いてしまう。 |
+### 1.2 解決された課題
+1. **銃声に対する Mob・ウォーデンの無反応**:
+   - SuperbWarfare の発砲イベント（`ShootEvent.Post`）をフックし、銃ごとの到達半径に応じた物理音響シミュレーションを経て、周囲の Mob（Stealth Capability）およびウォーデンへ直接警戒・振動を伝達。
+2. **壁・ドアを無視した単純伝播の排除**:
+   - 壁や床天井の厚みに応じた貫通減衰と、開いたドアや通路を回り込む「最大3ホップの回折迂回探索」を実装。障害物の向こう側への音の届き方をリアルに計算。
+3. **サプレッサーの戦術的トレードオフ**:
+   - 音響半径を大幅カットし、遠距離リバーブ音をミュート。同時に集弾率、初速、連射速度（RPM）、反動、重量などの多面的な性能ペナルティを課すことが可能。
+4. **足音と銃声の完全分離**:
+   - Stealth Mod 側の標準検知距離（`base_hearing_range: 25`）を改変することなく、銃声のみ 60m〜90m 先まで伝播。
 
 ---
 
-## 3. アドオンの要件定義とアーキテクチャ
+## 2. システムアーキテクチャ
 
 ```mermaid
 flowchart TD
@@ -46,124 +25,149 @@ flowchart TD
         SE["ShootEvent.Post 発火"]
     end
 
-    subgraph Addon["新規アドオン (本Mod)"]
-        Handler["Event Listener (ShootHandler)"]
+    subgraph Core["本アドオン (SuperbStealth)"]
+        Listener["GunShootEventListener"]
         Check{"サプレッサー装着?<br/>(BARREL == 2)"}
-        VanillaVib["バニラ GameEvent.PROJECTILE_SHOOT<br/>(または EXPLODE) を発火"]
-        CapAlert["SOUND_RADIUS 内の Mob を走査<br/>STEALTH_CAPABILITY に直接座標＆警戒度付与"]
-        Mixin["GunItem#modifyProperty への Mixin<br/>(RPM を 15%〜20% 低下)"]
+        CalcRad["有効到達半径の計算<br/>(SOUND_RADIUS × 0.4 × 16m)"]
+        ShooterExit["射撃者周辺の開口部探索<br/>(findShooterRoomExit)"]
+        
+        subgraph Occlusion["物理音響エンジン (SoundOcclusionHelper)"]
+            Direct["直線レイキャスト (ClipContext)"]
+            MultiPen["壁/床天井 貫通厚み減衰<br/>(checkMultiPenetration)"]
+            MultiHop["開口部 回折迂回探索<br/>(searchMultiHopDetour / 最大3ホップ)"]
+        end
+
+        ForgeHUD["VanillaGameEvent 送信<br/>(Stealth HUD ノイズメーター用)"]
+        Alert["Mob 警戒度・記憶座標更新<br/>(StealthAlertHandler)"]
+        WardenAction["Warden 怒り値加算 & 振動スケジュール"]
+        SculkAction["スカルクセンサー 振動スケジュール<br/>(SculkVibrationHandler)"]
+        DebugViz["パーティクル描画 & チャット通知<br/>(DebugParticleManager)"]
+        GunStats["GunItem 性能補正 & リバーブカット<br/>(MixinGunItem)"]
     end
 
-    subgraph Target["検知対象"]
-        Warden["ウォーデン<br/>(バニラ振動システム)"]
-        StealthHUD["Stealth HUD<br/>(音波メーターが激しく跳ねる)"]
-        StealthMobs["周囲の Mob<br/>(調査・戦闘・逃走AIへ遷移)"]
+    subgraph Targets["検知対象"]
+        HUD["Stealth HUD"]
+        MobCap["周辺 Mob (IStealthState)"]
+        Warden["ウォーデン"]
+        Sculk["スカルクセンサー"]
     end
 
-    SE --> Handler
-    Handler --> Check
-    Check -- "サプレッサーなし" --> VanillaVib
-    Check -- "サプレッサーなし" --> CapAlert
-    Check -- "サプレッサーあり" -->|"至近距離 (8m) のみ発火<br/>遠距離走査はスキップ"| VanillaVib
+    SE --> Listener
+    Listener --> Check
+    Check --> CalcRad
+    CalcRad --> ShooterExit
+    ShooterExit --> Direct
+    Direct -- 遮蔽あり --> MultiPen
+    Direct -- 遮蔽あり --> MultiHop
+    
+    Listener --> ForgeHUD
+    MultiPen --> Alert
+    MultiHop --> Alert
+    MultiHop --> WardenAction
+    MultiHop --> SculkAction
+    Direct --> DebugViz
+    MultiHop --> DebugViz
 
-    VanillaVib --> Warden
-    VanillaVib --> StealthHUD
-    CapAlert --> StealthMobs
-    Mixin -.->|"武器性能に介入"| SuperbWarfare
+    ForgeHUD --> HUD
+    Alert --> MobCap
+    WardenAction --> Warden
+    SculkAction --> Sculk
+    GunStats -.->|"武器性能・音量介入"| SuperbWarfare
 ```
 
-### 3.1 仕様詳細
-1. **足音と銃声の完全分離**
-   - `stealth-common.toml` の `base_hearing_range` は `25`（標準値）のまま維持。
-   - 銃声のみ、銃ごとの `SOUND_RADIUS`（例: 50m〜80m）に基づいて Mob の Capability へ直接音源座標と警戒度を注入する。
-2. **サプレッサーのトレードオフ（ゲームバランス）**
-   - **消音効果**: 遠距離への直接通知をカットし、バニラ `GameEvent` も 8m 以内のみに限定（完全消音もコンフィグで選択可）。
-   - **性能ペナルティ**: `GunItem` への Mixin により、サプレッサー装着時の発射レート（`GunProp.RPM`）を元の 80%〜85% に低下させる（UI/ツールチップにも自動反映）。
+---
+
+## 3. モジュール別実装仕様
+
+### 3.1 発砲検知と音響距離変換 (`GunShootEventListener`)
+- **リスナ**: `ShootEvent.Post` (Forge EventBus)
+- **距離計算**:
+  SuperbWarfare の `GunProp.SOUND_RADIUS` は音量係数（Volume）であるため、Minecraft の標準音響到達距離式（$\text{distance} = \text{volume} \times 0.4 \times 16\text{m}$）を用いてブロック単位の半径に変換（フォールバック音量: 14.0 = 約89.6m）。
+- **サプレッサー減衰**:
+  サプレッサー装着時は `suppressorRadiusMultiplier`（標準 0.25 = 25%）を乗算（最低保証半径: 8.0m）。
+- **HUD 連携**:
+  バニラの 16m 制限通知を発火させず Stealth Mod の HUD ノイズメーターのみを跳ねさせるため、Forge EventBus に直接 `VanillaGameEvent(PROJECTILE_SHOOT)` を発行。
+
+### 3.2 物理音響伝播エンジン (`SoundOcclusionHelper`)
+1. **直接貫通（Multi-Penetration）**:
+   - `ClipContext.Block.COLLIDER` による多重ブロック貫通レイキャスト。
+   - ブロック衝突面（法線）から壁・床天井を判定し、それぞれの貫通厚み（m）× ペナルティ値（壁: 8m/ブロック、床天井: 12m/ブロック）を残存距離から減算。
+2. **回折迂回（Multi-Hop Detour）**:
+   - 直線ルートが遮蔽された場合、射撃者の部屋の出口（開いたドア等）および障害物周辺の開口部（空気ブロック、物理的に通過可能な開口部）を探索。
+   - 最大3ホップ（`maxDetourHops`）まで分枝限定法（Branch and Bound）による枝刈り付き再帰探索を行い、最短・最強の迂回ルートを算出。
+   - 貫通ルートと迂回ルートのうち、**Mob への到達残存音圧（remainingStrength）が高い方**を最終結果として採用。
+
+### 3.3 Mob 警戒度・ウォーデン制御 (`StealthAlertHandler`)
+- **Stealth Capability 連携**:
+  - 到達残存音圧の比率（`strengthRatio`）に応じて、音源記憶優先度（`priority`: 5.0〜15.0）を算出。
+  - 通常射撃: 即座に調査警戒度（`unsuppressedAlertLevel: 0.80`）へ遷移。
+  - サプレッサー射撃: 残存音圧に応じた微小な警戒度加算（0.20〜0.50）、上限値（0.85）でキャップ。
+- **ウォーデン制御**:
+  - `increaseAngerAt` により射撃者への怒り値を直接加算（サプレッサー時は音圧連動、通常時は +10）。
+  - `VibrationSystem.Listener#forceScheduleVibration` を呼び出し、振動感知アニメーションを確実に誘発。
+
+### 3.4 スカルクセンサー連携 (`SculkVibrationHandler`)
+- 到達半径内のチャンクを走査し、`SculkSensorBlockEntity` を抽出。
+- センサー座標に対する音響遮蔽チェックを行い、音が到達した場合のみ `forceScheduleVibration` を発行。
+- レッドストーン出力周波数（コンパレータ信号強度）:
+  - サプレッサー射撃: 周波数 10（発射音相当）
+  - 通常射撃: 周波数 15（爆発音相当・最強）
+
+### 3.5 サプレッサー性能補正 & 音響調整 (`MixinGunItem`)
+- **音響スケーリング**:
+  `GunItem#playFireSounds` をフック。サプレッサー装着時は遠距離リバーブ音をキャンセルし、至近距離用の消音発砲音（`getFire3PSilent`）のみを、有効音響半径に合わせた音量にスケーリングして再生。
+- **動的パラメータ補正**:
+  `GunItem#modifyProperty` に介入し、サプレッサー装着時の倍率を適用：
+  - 集弾率（`SPREAD`, `ZOOM_SPREAD_RATE`）
+  - ダメージ（`DAMAGE`）
+  - 初速（`VELOCITY`）
+  - 連射速度（`RPM`）
+  - 反動（`RECOIL`, `RECOIL_X`, `RECOIL_Y`）
+  - 銃重量（`WEIGHT`）
+
+### 3.6 ゲーム内音響可視化デバッグ (`DebugParticleManager` / `SuperbStealthCommands`)
+- コマンド `/superbstealth debug` でプレイヤーごとにトグル切り替え。
+- 直進到達（緑）、開口部迂回（黄マーカー & 黄ライン）、遮断・消音（赤マーカー & 赤ライン）を 5秒間（100 ticks）ワールド内にパーティクル描画。
+- チャット欄に Mob ごとの到達結果・残存音圧・ホップ数をリアルタイム表示。
 
 ---
 
-## 4. 段階的実装ロードマップ
+## 4. コンフィグ仕様 (`superbstealth-common.toml`)
 
-### Phase 1: 基礎発砲検知（最小プロトタイプ・Mixin不要）
-- **ゴール**: 銃を撃った瞬間にウォーデン、近くの Mob、Stealth HUD が反応することを確認する。
-- **実装内容**:
-  1. Forge EventBus で `ShootEvent.Post` を受信するリスナを作成。
-  2. 発砲地点で `serverLevel.gameEvent(shooter, GameEvent.PROJECTILE_SHOOT, shootPos)` を呼び出す。
-- **検証手順**:
-  - ゲーム内で銃を発砲し、画面上の Stealth HUD の音波メーターが跳ね上がるか確認。
-  - 25m 以内にいるウォーデンやゾンビが発砲者を振り向くか確認。
-
-### Phase 2: サプレッサー消音 ＆ 遠距離伝播（Stealth Capability 連携）
-- **ゴール**: サプレッサーなし時は遠くの敵（50m+）が集まり、サプレッサー装着時は敵に気づかれない状態を作る。
-- **実装内容**:
-  1. `data.attachment.get(AttachmentType.BARREL) == 2` による条件分岐。
-  2. **サプレッサーなし**:
-     - `shootPos` を中心に `SOUND_RADIUS` 内の `Mob` を取得。
-     - 各 Mob の `StealthStateProvider.STEALTH_CAPABILITY` を取得し、`setSuspiciousLocation(shootPos, priority, time)` および `addAlertLevel(0.4F)` を呼ぶ。
-  3. **サプレッサーあり**:
-     - 遠距離通知をスキップ。至近距離（8m）のみ小さな GameEvent を発生させる。
-- **検証手順**:
-  - 50m 先のゾンビが、サプレッサーなし射撃で走り寄ってくるか確認。
-  - サプレッサー装着射撃で、15m 離れたゾンビが反応しないか確認。
-
-### Phase 3: 武器バランス調整（Mixin による RPM 低下）
-- **ゴール**: サプレッサー装着時に武器の連射速度（RPM）が低下するペナルティを実装する。
-- **実装内容**:
-  1. `GunItem` に対する Mixin を作成し、`modifyProperty` または `getCustomRPM` をフック。
-  2. `BARREL == 2` の場合、計算後の RPM から `15%`（または固定値）を減算。
-- **検証手順**:
-  - アタッチメント台でサプレッサーを付けた際、銃の性能表示（RPM）が下がっているか確認。
-  - 実際の射撃時の連射速度が低下しているか確認。
-
-### Phase 4: コンフィグ化と設定調整
-- **ゴール**: サーバー管理者が検知距離や低下率をカスタマイズできるようにする。
-- **実装内容**:
-  - `superb_stealth-common.toml` を作成：
-    - `unsuppressed_hearing_multiplier`（銃声半径の倍率）
-    - `suppressed_hearing_range`（サプレッサー時の最大検知距離、デフォルト 8.0）
-    - `suppressor_rpm_penalty_rate`（RPM 低下率、デフォルト 0.15 = -15%）
+| セクション | 項目名 | デフォルト値 | 説明 |
+| :--- | :--- | :--- | :--- |
+| `[occlusion]` | `floorCeilingPenalty` | `12.0` | 床・天井貫通時の距離減衰ペナルティ（m/厚） |
+| `[occlusion]` | `wallPenalty` | `8.0` | 壁・閉じたドア貫通時の距離減衰ペナルティ（m/厚） |
+| `[occlusion]` | `detourPenalty` | `2.0` | 開口部ホップごとの回折ペナルティ（m/ホップ） |
+| `[occlusion]` | `maxDetourHops` | `3` | 最大回折ホップ数 |
+| `[occlusion]` | `maxPenetrations` | `8` | 直線上の最大ブロック貫通数安全リミット |
+| `[occlusion]` | `shooterExitScanRadius`| `4` | 射撃者周辺の開口部探索半径（ブロック） |
+| `[gun]` | `suppressorRadiusMultiplier`| `0.25` | サプレッサー時の音響半径倍率（25%） |
+| `[gun]` | `suppressorMinRadius` | `8.0` | サプレッサー時の最低保証到達半径（m） |
+| `[gun]` | `fallbackGunVolume` | `14.0` | 銃声半径未定義時のフォールバック音量（約89.6m） |
+| `[suppressor_modifier]` | `spreadMultiplier` | `1.10` | サプレッサー時の拡散倍率（+10%） |
+| `[suppressor_modifier]` | `zoomSpreadRateMultiplier` | `1.0` | ADS 時の拡散補正倍率 |
+| `[suppressor_modifier]` | `damageMultiplier` | `1.0` | 弾丸ダメージ倍率 |
+| `[suppressor_modifier]` | `velocityMultiplier` | `1.0` | 銃口初速倍率 |
+| `[suppressor_modifier]` | `rpmMultiplier` | `1.0` | 連射速度（RPM）倍率 |
+| `[suppressor_modifier]` | `recoilMultiplier` | `1.0` | 反動倍率 |
+| `[suppressor_modifier]` | `additionalWeight` | `0.0` | 追加銃重量 |
+| `[stealth]` | `unsuppressedAlertLevel`| `0.80` | 通常射撃時の Mob 警戒度 |
+| `[stealth]` | `suppressedMinAlertGain`| `0.20` | サプレッサー射撃時の最小警戒度増加量 |
+| `[stealth]` | `suppressedMaxAlertGain`| `0.50` | サプレッサー射撃時の最大警戒度増加量 |
+| `[stealth]` | `suppressedMaxAlert` | `0.85` | サプレッサー射撃時の警戒度上限キャップ |
+| `[stealth]` | `soundPriorityMin` | `5.0` | 記憶優先度の最小値（足音と同等） |
+| `[stealth]` | `soundPriorityMax` | `15.0` | 記憶優先度の最大値（至近距離） |
+| `[sculk]` | `suppressedSculkFrequency` | `10` | サプレッサー時の振動周波数（信号強度 10） |
+| `[sculk]` | `unsuppressedSculkFrequency`| `15` | 通常射撃時の振動周波数（信号強度 15） |
 
 ---
 
-## 5. 新規プロジェクト環境構築ガイド
+## 5. 開発・ビルド環境仕様
 
-### 5.1 開発環境スペック
 - **Minecraft**: 1.20.1
-- **Minecraft Forge**: 47.3.0 以降
-- **Java**: 17 (Eclipse Adoptium JDK 17)
+- **Minecraft Forge**: 47.4.28
+- **Gradle**: 8.8 (Java Toolchain 17)
+- **Java**: Java 17 (Temurin / Eclipse Adoptium 等)
 - **マッピング**: Mojang Official (`official_1.20.1`)
-
-### 5.2 依存関係の設定（`build.gradle` 例）
-新規プロジェクトの `libs/` フォルダに対象 Mod を配置し、フラットディレクトリ参照させる構成が確実です。
-
-```groovy
-repositories {
-    flatDir {
-        dir 'libs'
-    }
-}
-
-dependencies {
-    minecraft 'net.minecraftforge:forge:1.20.1-47.3.0'
-
-    // SuperbWarfare
-    implementation fg.deobf("blank:superbwarfare-0.8.9.2-mc1.20.1-65d985a64-all")
-
-    // Stealth by Karl Karlmann
-    implementation fg.deobf("blank:stealth_1.20.1_forge_1.1.100")
-
-    // 必要に応じて GeckoLib 等（SuperbWarfare の前提）
-}
-```
-
-### 5.3 パッケージ構成案
-```text
-src/main/java/net/addon/superbstealth/
-├── SuperbStealthMod.java        // Mod メインクラス
-├── config/
-│   └── SuperbStealthConfig.java // TOML コンフィグ
-├── event/
-│   └── GunShootEventListener.java // Phase 1 & 2: 発砲検知と振動・Capability 制御
-└── mixin/
-    └── GunItemMixin.java         // Phase 3: サプレッサー RPM 低下 Mixin
-```
+- **ライセンス**: GNU General Public License v3.0 (GPL-3.0)
