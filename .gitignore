@@ -19,3 +19,4 @@ out/
 
 # Compiled classes
 *.class
+/read_only

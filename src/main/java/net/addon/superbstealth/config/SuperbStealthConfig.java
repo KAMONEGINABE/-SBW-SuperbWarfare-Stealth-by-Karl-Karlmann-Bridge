@@ -4,7 +4,7 @@ import net.minecraftforge.common.ForgeConfigSpec;
 import org.apache.commons.lang3.tuple.Pair;
 
 /**
- * SuperbWarfare × Stealth 連携アドオンの共通設定 (superbstealth-common.toml) の定義クラス。
+ * Common configuration specification for SuperbWarfare × Stealth integration (superbstealth-common.toml).
  */
 public class SuperbStealthConfig {
 
@@ -23,6 +23,15 @@ public class SuperbStealthConfig {
     public final ForgeConfigSpec.DoubleValue suppressorRadiusMultiplier;
     public final ForgeConfigSpec.DoubleValue suppressorMinRadius;
     public final ForgeConfigSpec.DoubleValue fallbackGunVolume;
+
+    // --- [suppressor_modifier] ---
+    public final ForgeConfigSpec.DoubleValue suppressorSpreadMultiplier;
+    public final ForgeConfigSpec.DoubleValue suppressorZoomSpreadRateMultiplier;
+    public final ForgeConfigSpec.DoubleValue suppressorDamageMultiplier;
+    public final ForgeConfigSpec.DoubleValue suppressorVelocityMultiplier;
+    public final ForgeConfigSpec.DoubleValue suppressorRpmMultiplier;
+    public final ForgeConfigSpec.DoubleValue suppressorRecoilMultiplier;
+    public final ForgeConfigSpec.DoubleValue suppressorAdditionalWeight;
 
     // --- [stealth] ---
     public final ForgeConfigSpec.DoubleValue unsuppressedAlertLevel;
@@ -100,6 +109,52 @@ public class SuperbStealthConfig {
                         "Note: Actual in-game hearing distance in blocks is calculated as (volume * 0.4 * 16.0) = (volume * 6.4).",
                         "For example, volume 14.0 translates to ~89.6m.")
                 .defineInRange("fallbackGunVolume", 14.0, 1.0, 100.0);
+
+        builder.pop();
+
+        // [suppressor_modifier]
+        builder.comment(
+                "Suppressor Gun Performance Modifiers",
+                "--------------------------------------------------------------------------------------------------------",
+                "Controls gun gameplay balance when a suppressor (silencer) is attached to the weapon.",
+                "Multipliers scale the base property (1.0 = no change, > 1.0 = increased, < 1.0 = decreased).",
+                "--------------------------------------------------------------------------------------------------------"
+        ).push("suppressor_modifier");
+
+        suppressorSpreadMultiplier = builder
+                .comment("Base bullet spread multiplier when a suppressor is attached (1.1 = +10% wider spread).",
+                        "Affects both hipfire and ADS base spread angle.")
+                .defineInRange("spreadMultiplier", 1.10, 0.1, 10.0);
+
+        suppressorZoomSpreadRateMultiplier = builder
+                .comment("ADS spread reduction rate multiplier (1.0 = vanilla behavior).",
+                        "Lower values (< 1.0) make ADS tighter, higher values (> 1.0) make ADS looser.")
+                .defineInRange("zoomSpreadRateMultiplier", 1.0, 0.0, 10.0);
+
+        suppressorDamageMultiplier = builder
+                .comment("Bullet damage multiplier when a suppressor is attached (1.0 = no damage reduction).",
+                        "Set to e.g. 0.85 for -15% damage penalty.")
+                .defineInRange("damageMultiplier", 1.0, 0.0, 10.0);
+
+        suppressorVelocityMultiplier = builder
+                .comment("Muzzle velocity (bullet speed) multiplier (1.0 = normal velocity).",
+                        "Set to e.g. 0.80 for subsonic bullet velocity, which causes greater bullet drop over long distance.")
+                .defineInRange("velocityMultiplier", 1.0, 0.1, 10.0);
+
+        suppressorRpmMultiplier = builder
+                .comment("Fire rate (RPM) multiplier (1.0 = normal rate of fire).",
+                        "Set to e.g. 0.90 for a 10% lower fire rate.")
+                .defineInRange("rpmMultiplier", 1.0, 0.1, 10.0);
+
+        suppressorRecoilMultiplier = builder
+                .comment("Recoil multiplier for both X and Y axes (1.0 = normal recoil).",
+                        "Note: SuperbWarfare already applies a slight natural recoil reduction for suppressors (2.2 vs 2.4).")
+                .defineInRange("recoilMultiplier", 1.0, 0.0, 10.0);
+
+        suppressorAdditionalWeight = builder
+                .comment("Additional gun weight added on top of SuperbWarfare's default (+1.0) when suppressor is attached.",
+                        "Higher weight reduces sprint-to-fire speed, slows down ADS entry speed, and reduces player walking speed.")
+                .defineInRange("additionalWeight", 0.0, -10.0, 50.0);
 
         builder.pop();
 
