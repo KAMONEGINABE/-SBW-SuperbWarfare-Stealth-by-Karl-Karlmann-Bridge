@@ -12,80 +12,69 @@ An unofficial bridge addon that connects the modern firearms of **SuperbWarfare*
 
 ## English
 
-### 1. Overview & Development Stance
+### 1. Overview
 
-This mod hooks into SuperbWarfare gun firing events, routes sound through a lightweight acoustic occlusion model (wall penetration & doorway diffraction), and dispatches alertness/vibrations directly to Stealth Mod's mobs, the Warden, and Sculk Sensors.
-
-> **Development Note**:  
-> This project is a personal hobby addon originally built for a private modpack and shared as-is. The codebase was developed with AI assistance. While I understand the overall design and architecture, fine-grained syntax and deep internals are beyond my casual expertise. That said, it has been thoroughly tested in-game and works reliably on my end.
+An unofficial bridge addon that intercepts SuperbWarfare gun firing events and routes sound through a lightweight acoustic occlusion and diffraction model, dispatching alertness and vibrations directly to mobs from Stealth Mod, the Warden, and Sculk Sensors.
 
 ### 2. Dependencies
 
 | Dependency | Required Version | Note |
 | :--- | :--- | :--- |
 | **Minecraft** | `1.20.1` | |
-| **Minecraft Forge** | `47.3.0` or higher | Tested on `47.4.28` |
+| **Minecraft Forge** | `47.4.28` | Tested on this version |
 | **SuperbWarfare** | `0.8.9.2` or higher | Main firearm framework |
 | **Stealth by Karl Karlmann** | `1.1.100` or higher | Stealth AI & capability system |
-| **Kotlin for Forge** | `4.12.0` | Runtime dependency |
+| **Kotlin for Forge** | `4.12.0` | Bundled with SuperbWarfare |
 
-### 3. Building from Source
+### 3. Building
 
-This project uses Gradle with the Java Toolchain (configured for Java 17). Dependencies (SuperbWarfare and Stealth) are automatically resolved and deobfuscated via CurseMaven.
+This project uses Gradle with the Java Toolchain. Dependencies are automatically resolved and deobfuscated via CurseMaven, so there is no need to manually place dependency jars in a `lib` directory.
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/<owner>/superbstealth.git
-   cd superbstealth
-   ```
-2. **Build the mod**:
-   - Windows:
-     ```cmd
-     .\gradlew.bat build
-     ```
-   - Linux / macOS:
-     ```bash
-     ./gradlew build
-     ```
-3. The compiled jar will be generated in `build/libs/superbstealth-<version>.jar`.
-
-### 4. Architecture & Technical Overview
+### 4. Technical Overview
 
 - **Acoustic Occlusion (`SoundOcclusionHelper`)**:
-  - Does **not** use heavy acoustic raytracing. Instead, it utilizes Minecraft's `VoxelShape` block colliders and raycasts.
-  - **Penetration**: Traces straight-line rays through blocks, deducting distance penalties based on physical wall/floor thickness.
-  - **Diffraction**: If line-of-sight is blocked, a branch-and-bound search finds detour routes through openings (open doors, stairs, air) up to 3 hops.
+  - Implements a lightweight approximation model using Minecraft `VoxelShape` collision bounds and raycasts.
+  - **Penetration**: Calculates distance attenuation based on actual physical obstruction thickness.
+  - **Diffraction**: When line-of-sight is blocked, finds detour routes through openings like open doors or stairs via branch-and-bound search up to 3 hops (hop count is configurable).
+  - Uses the route with higher sound transmission for calculation.
 - **Mob AI Integration (`StealthAlertHandler`)**:
-  - Injects sound location and alert values directly into each mob's `IStealthState` capability.
-  - Directly increments the Warden's anger towards the shooter and forces vibration animations.
+  - Bypasses the vanilla 16m acoustic limit of Warden-based listening by directly adding sound coordinates and alert values to each mob's `IStealthState`.
+  - Individually increments anger for the Warden.
 - **Sculk Sensors (`SculkVibrationHandler`)**:
-  - Scans nearby chunks and schedules vibrations only for sensors reached by unoccluded sound waves, using distinct frequencies for unsuppressed vs. suppressed gunfire.
-- **Suppressor Gun Handling (`MixinGunItem`)**:
-  - Cancels long-range reverb sounds on suppressed shots, dynamically scaling close-range shot volume to match the in-game detection radius (both for mob AI and other players in multiplayer).
-  - Intercepts `modifyProperty` to apply configurable stat multipliers (RPM, spread, recoil, velocity, weight).
+  - Schedules vibrations only for sensors that clear occlusion checks.
+- **Firearm Properties (`MixinGunItem`)**:
+  - With a suppressor attached, cancels distant reverb and plays close-range gunfire scaled to the detection radius. Sound attenuation applies equally to other players in multiplayer.
+  - Hooks `modifyProperty` to apply multipliers for spread, RPM, muzzle velocity, recoil, and weight.
 - **In-Game Debugger (`DebugParticleManager`)**:
-  - Run `/superbstealth debug` to render sound paths as colored particles (green: direct, yellow: detoured via doors, red: muffled/blocked).
+  - Run `/superbstealth debug` to render sound paths with particles: green for direct reach, yellow for doorway detours, and red for blocked paths.
 
 ### 5. Configuration
 
-Settings are located in `config/superbstealth-common.toml`:
-- `[occlusion]`: Wall and floor/ceiling penetration penalties, diffraction hop limits, and exit scan radius.
-- `[gun]`: Suppressor radius multipliers, minimum audible radius, and fallback gunshot volume.
-- `[suppressor_modifier]`: Stat multipliers applied when a suppressor is attached (spread, damage, velocity, RPM, recoil, weight).
+Configurable via `config/superbstealth-common.toml`:
+- `[occlusion]`: Wall and floor/ceiling penetration penalties, detour hop limits, and room exit scan radius.
+- `[gun]`: Suppressor acoustic radius multiplier, minimum guaranteed radius, and fallback gunshot volume.
+- `[suppressor_modifier]`: Stat multipliers with a suppressor attached: spread, damage, velocity, RPM, recoil, and added weight.
 - `[stealth]`: Alert level gains, memory priority, and investigation thresholds.
-- `[sculk]`: Vibration frequencies and comparator outputs for sculk sensors.
+- `[sculk]`: Sculk sensor vibration frequency settings.
 
-### 6. Contributing & Issues
+### 6. AI-Assisted Development
 
-- **Bug Reports**: Please submit an Issue detailing your reproduction steps, a crash log (`crash-reports/` or `logs/latest.log`), and a mod list.
-- **Feature Requests**: Ideas and suggestions are also welcome. Implementation is not guaranteed, but if an idea sounds fun and fits my own playthrough, I might build it.
-- **Pull Requests**: Contributions and improvements are welcome! Please note that as a casual personal project, complex fixes may take time.
+This mod is an addon originally built for a private modpack and shared publicly. The code was developed primarily with AI assistance.
+While I understand the overall architecture and role of each class, I do not personally write every line of low-level syntax.
+That said, it has been thoroughly tested in-game and runs stably in my personal environment.
+Furthermore, all commented-out code has been reviewed and refactoring has been handled with care, ensuring the codebase remains clean and readable for other developers.
 
-### 7. Credits & License
+### 7. Issues & Contributions
 
-- **SuperbWarfare** by Atsuishio, Roki27, Light_Quanta, and contributors.
-- **Stealth by Karl Karlmann** by KarlKarlmann.
-- Licensed under the **GNU General Public License v3.0 (GPL-3.0)**. See [LICENSE](LICENSE) for details.
+- **Bug Reports**: Please open an Issue with reproduction steps, crash logs from `crash-reports/` or `logs/latest.log`, and your mod list.
+- **Pull Requests**: Bug reports and fix PRs are welcome. Since this is a personal hobby project, complex fixes may take some time.
+- **Feature Requests**: Ideas and suggestions are welcome. While implementation cannot be guaranteed, features that sound interesting or fit my own gameplay may be implemented when time permits.
+
+### 8. Credits & License
+
+- **SuperbWarfare**: Atsuishio, Roki27, Light_Quanta, and contributors
+- **Stealth by Karl Karlmann**: KarlKarlmann
+- License: **GNU General Public License v3.0 (GPL-3.0)**. See [LICENSE](LICENSE) for details.
 
 ---
 
@@ -93,57 +82,40 @@ Settings are located in `config/superbstealth-common.toml`:
 
 ### 1. プロジェクト概要とスタンス
 
-本 Mod は、SuperbWarfare の発砲イベントを受信し、軽量な音響遮蔽・回折モデル（壁貫通減衰 ＋ ドア迂回探索）を通じて、Stealth Mod の Mob、ウォーデン、スカルクセンサーへ直接警戒度や振動を伝達する非公式アドオンです。
+本 Mod は、SuperbWarfare の発砲イベントを受信し、軽量な音響遮蔽・回折モデルを通じて、Stealth Mod の Mob、ウォーデン、スカルクセンサーへ直接警戒度や振動を伝達する非公式アドオンです。
 
-> **開発スタンスについて**:  
-> 個人用 Modpack 向けに制作した趣味のアドオンを現状有姿でお裾分け公開しているものです。コードは主に AI の支援を借りて作成しています。全体の設計や各クラスの役割は把握していますが、細かい構文の深部まで全て自力で把握しているわけではありません。ゲーム内でのテストを重ねており、個人環境では安定して動作しています。
-
-### 2. 前提条件（Dependencies）
+### 2. 前提環境
 
 - **Minecraft**: `1.20.1`
-- **Minecraft Forge**: `47.3.0` 以降（動作確認: `47.4.28`）
+- **Minecraft Forge**: `47.4.28`
 - **SuperbWarfare**: `0.8.9.2` 以降
 - **Stealth by Karl Karlmann**: `1.1.100` 以降
-- **Kotlin for Forge**: `4.12.0`（実行時前提 Mod）
+- **Kotlin for Forge**: `4.12.0` - SBWに標準で内包
 
-### 3. ソースコードからのビルド手順
+### 3. ビルドについて
 
-本プロジェクトは Gradle Java Toolchain（Java 17）を使用しています。前提 Mod（SuperbWarfare および Stealth）は CurseMaven を通じて自動的にダウンロードおよび難読化解除（deobf）されます。
+本プロジェクトは Gradle Java Toolchainを使用しています。
+ビルド時には前提 Modは CurseMaven を利用して自動的にダウンロードおよび難読化解除されるため、libフォルダ内へ前提modを配置する必要はありません。
 
-1. **リポジトリのクローン**:
-   ```bash
-   git clone https://github.com/<owner>/superbstealth.git
-   cd superbstealth
-   ```
-2. **ビルド実行**:
-   - Windows:
-     ```cmd
-     .\gradlew.bat build
-     ```
-   - Linux / macOS:
-     ```bash
-     ./gradlew build
-     ```
-3. ビルドされた Jar は `build/libs/superbstealth-<version>.jar` に生成されます。
-
-### 4. 技術概要・アーキテクチャ
+### 4. コードの概要（開発者向け）
 
 - **物理音響遮蔽モデル (`SoundOcclusionHelper`)**:
-  - 重たい音響レイトレーシングではなく、Minecraft の `VoxelShape` 当たり判定とレイキャストを活用した軽量近似モデルです。
-  - **貫通減衰**: 障害物の実貫通厚みに応じた距離減衰を計算（壁/床天井で個別ペナルティ）。
-  - **回折迂回**: 直線が遮蔽された場合、開いたドアや階段などの開口部を経由するルートを最大3ホップまで分枝限定法で探索。
+  - Minecraft の `VoxelShape` 当たり判定とレイキャストを活用した軽量近似モデルを実装。
+  - **貫通減衰**: 障害物の実貫通厚みに応じた距離減衰を計算。
+  - **回折迂回**: 直線が遮蔽された場合、開いたドアや階段などの開口部を経由するルートを最大3回の屈折まで探索。（屈折回数はコンフィグで変更可能）
+  - より伝達量の大きい方を計算に利用する。
 - **Mob AI 連携 (`StealthAlertHandler`)**:
-  - 各 Mob の `IStealthState` (Capability) に音源座標と警戒度を直接注入。
-  - ウォーデンに対する怒り値加算（Anger）および振動感知アニメーションの強制スケジュール。
+  - ウォーデンの音認識を用いた聴覚システムは16mまでの距離制限が存在していたので、各 Mob の `IStealthState` に音源座標と警戒度を直接加算して制限を回避。
+  - ウォーデンに対しては個別に怒り値加算を実装。
 - **スカルクセンサー (`SculkVibrationHandler`)**:
-  - 遮蔽をクリアしたセンサーにのみ振動をスケジュール（通常射撃と消音射撃で異なる周波数を出力）。
+  - 遮蔽をクリアしたセンサーにのみ振動をスケジュール。
 - **銃器プロパティ介入 (`MixinGunItem`)**:
-  - サプレッサー装着時、遠距離リバーブ音をキャンセルし、至近距離音のみを検知距離に合わせて再生（マルチプレイ時の他プレイヤーの耳にも連動）。
+  - サプレッサー装着時、遠距離リバーブ音をキャンセルし、至近距離音のみを検知距離に合わせて再生。マルチプレイ時の他プレイヤーの耳にも音の減衰が連動する。
   - `modifyProperty` をフックし、集弾率・RPM・初速・反動・重量などの倍率補正を適用。
 - **ゲーム内デバッグ表示 (`DebugParticleManager`)**:
   - `/superbstealth debug` コマンドで音波伝播（緑: 直進到達、黄: ドア迂回、赤: 遮断）をパーティクル描画。
 
-### 5. 設定（Configuration）
+### 5. 設定
 
 設定は `config/superbstealth-common.toml` から変更可能です：
 - `[occlusion]`: 壁・床天井の貫通減衰値、迂回ホップ上限、部屋出口探索範囲。
@@ -152,13 +124,20 @@ Settings are located in `config/superbstealth-common.toml`:
 - `[stealth]`: 警戒度増加量、記憶優先度、調査移行しきい値。
 - `[sculk]`: スカルクセンサーの振動周波数設定。
 
-### 6. Issue・コントリビューション方針
+### 6. AI利用について
+
+本modは非公開の個人用 Modpack 向けに制作したアドオンを公開しているもので、コードは主に AI の支援を借りて作成しています。
+全体の設計や各クラスの役割は把握していますが、細かい構文を全行自力で把握しているわけではありません。
+とはいえ、ゲーム内でのテストは重ねており、個人環境では安定して動作しています。
+またコメントアウトには全て目を通し、リファクタリングにも一定の注意を払っていますので、開発者向けにもある程度読みやすいコードになっているはずです。
+
+### 7. Issue・コントリビューション方針
 
 - **バグ報告**: 再現手順、クラッシュログ（`crash-reports/` または `logs/latest.log`）、導入 Mod 一覧を添えて Issue を作成してください。
-- **機能提案（Feature Requests）**: アイデアや新機能の提案も歓迎します。必ず実装するお約束はできませんが、面白そうなアイデアや作りたくなった/遊んでみたくなった機能は、時間がとれた際に作るかもしれません。
-- **プルリクエスト (PR)**: 改善提案や修正 PR は歓迎します。個人開発のため、複雑な修正対応にはお時間をいただく場合があります。
+- **プルリクエスト**: バグ報告や修正 PR は歓迎します。個人開発のため、複雑な修正対応にはお時間をいただく場合があります。
+- **機能提案**: アイデアや新機能の提案も歓迎します。実装する約束はできませんが、面白そうなアイデアや作りたくなった/遊んでみたくなった機能は、時間がとれた際に作るかもしれません。
 
-### 7. クレジット & ライセンス
+### 8. クレジット & ライセンス
 
 - **SuperbWarfare**: Atsuishio 氏, Roki27 氏, Light_Quanta 氏 ほか
 - **Stealth by Karl Karlmann**: KarlKarlmann 氏
