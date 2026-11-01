@@ -21,7 +21,7 @@ An unofficial bridge addon that intercepts SuperbWarfare gun firing events and r
 | Dependency | Required Version | Note |
 | :--- | :--- | :--- |
 | **Minecraft** | `1.20.1` | |
-| **Minecraft Forge** | `47.4.28` | Tested on this version |
+| **Minecraft Forge** | `47.4.28` | |
 | **SuperbWarfare** | `0.8.9.2` or higher | Main firearm framework |
 | **Stealth by Karl Karlmann** | `1.1.100` or higher | Stealth AI & capability system |
 | **Kotlin for Forge** | `4.12.0` | Bundled with SuperbWarfare |
