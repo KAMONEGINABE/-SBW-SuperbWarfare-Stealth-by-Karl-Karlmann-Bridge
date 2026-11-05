@@ -87,6 +87,9 @@ dependencies {
     // Kotlin stdlib for compile-time annotation resolution
     compileOnly 'org.jetbrains.kotlin:kotlin-stdlib:1.9.22'
 
+    // TACZ (Compile-only for optional integration)
+    compileOnly fg.deobf("curse.maven:timeless-and-classics-zero-1028108:7278003")
+
     // Mixin annotation processor
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
 }

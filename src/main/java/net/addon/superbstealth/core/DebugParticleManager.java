@@ -1,6 +1,6 @@
-package net.addon.superbstealth.util;
+package net.addon.superbstealth.core;
 
-import net.addon.superbstealth.util.SoundOcclusionHelper.SoundResult;
+import net.addon.superbstealth.core.SoundOcclusionHelper.SoundResult;
 import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;

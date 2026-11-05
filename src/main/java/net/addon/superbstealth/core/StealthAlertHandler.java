@@ -1,7 +1,7 @@
-package net.addon.superbstealth.stealth;
+package net.addon.superbstealth.core;
 
 import net.addon.superbstealth.config.SuperbStealthConfig;
-import net.addon.superbstealth.util.SoundOcclusionHelper.SoundResult;
+import net.addon.superbstealth.core.SoundOcclusionHelper.SoundResult;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;

@@ -1,8 +1,7 @@
-package net.addon.superbstealth.sculk;
+package net.addon.superbstealth.core;
 
 import net.addon.superbstealth.config.SuperbStealthConfig;
-import net.addon.superbstealth.util.SoundOcclusionHelper;
-import net.addon.superbstealth.util.SoundOcclusionHelper.SoundResult;
+import net.addon.superbstealth.core.SoundOcclusionHelper.SoundResult;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;

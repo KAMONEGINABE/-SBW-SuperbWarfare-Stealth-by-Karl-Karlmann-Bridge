@@ -1,4 +1,4 @@
-package net.addon.superbstealth.util;
+package net.addon.superbstealth.core;
 
 import net.addon.superbstealth.config.SuperbStealthConfig;
 import net.minecraft.core.BlockPos;
@@ -249,152 +249,152 @@ public class SoundOcclusionHelper {
     /**
      * Calculates the detour exit point near the opening surface to prevent rays from hitting block corners at acute angles.
      */
-    private static Vec3 calculateOpeningExitPoint(Level level, BlockPos opening, Direction hitFace, Vec3 target) {
+    private static Vec3 calculateOpeningExitPoint(Level level, BlockPos opening, Direction initialFace, Vec3 target) {
         Vec3 center = Vec3.atCenterOf(opening);
+        BlockState state = level.getBlockState(opening);
+        VoxelShape shape = state.getCollisionShape(level, opening);
 
-        boolean isVerticalOpening = (hitFace.getAxis() == Direction.Axis.Y)
-                || isPhysicallyPassable(level, opening.above())
-                || isPhysicallyPassable(level, opening.below());
-
-        if (isVerticalOpening && Math.abs(target.y - center.y) > 0.5) {
-            double exitY = (target.y > center.y) ? (opening.getY() + 1.0) : (opening.getY());
-
-            Vec3 dir = target.subtract(center);
-            double lenHoriz = Math.sqrt(dir.x * dir.x + dir.z * dir.z);
-            double offsetX = 0.0;
-            double offsetZ = 0.0;
-            if (lenHoriz > 1.0E-4) {
-                offsetX = Math.min(0.35, Math.max(-0.35, (dir.x / lenHoriz) * 0.35));
-                offsetZ = Math.min(0.35, Math.max(-0.35, (dir.z / lenHoriz) * 0.35));
-            }
-
-            return new Vec3(opening.getX() + 0.5 + offsetX, exitY, opening.getZ() + 0.5 + offsetZ);
+        Vec3 exitVector;
+        if (shape.isEmpty()) {
+            exitVector = Vec3.atLowerCornerOf(initialFace.getNormal()).scale(0.35);
         } else {
-            AABB openingBounds = new AABB(opening);
+            AABB bounds = shape.bounds();
             Vec3 rayDir = target.subtract(center).normalize();
-
-            Optional<Vec3> exit = openingBounds.clip(center, target);
-            if (exit.isPresent()) {
-                return exit.get();
-            }
-
-            return center.add(rayDir.scale(0.49));
+            Optional<Vec3> exit = bounds.move(opening).clip(center, center.add(rayDir.scale(2.0)));
+            exitVector = exit.map(p -> p.subtract(center).scale(0.8)).orElse(Vec3.ZERO);
         }
+
+        return center.add(exitVector);
     }
 
     private static double calculatePathLength(List<Vec3> path) {
-        double dist = 0.0;
+        double len = 0.0;
         for (int i = 0; i < path.size() - 1; i++) {
-            dist += path.get(i).distanceTo(path.get(i + 1));
+            len += path.get(i).distanceTo(path.get(i + 1));
         }
-        return dist;
+        return len;
     }
 
     /**
-     * Traces raycast through multiple walls. Warps to the exit face of each hit block to prevent
-     * loop exhaustion inside thick walls, and applies attenuation proportional to penetrated thickness.
+     * Calculates attenuation through physical solid block thickness via step-wise raycasting.
      */
     private static SoundResult checkMultiPenetration(Level level, Vec3 source, Vec3 target, float initialRadius, double straightDist) {
-        float remainingRadius = initialRadius;
-        Vec3 currentStart = source;
         Vec3 rayDir = target.subtract(source).normalize();
-        Set<BlockPos> traversedBlocks = new HashSet<>();
-        Vec3 lastHitLoc = source;
+        Vec3 currentStart = source;
+        float remainingRadius = initialRadius;
+        int penetrations = 0;
         int maxPenetrations = getMaxPenetrations();
-        boolean reachedTarget = false;
+        Vec3 lastStopPos = source;
 
-        while (maxPenetrations-- > 0) {
-            ClipContext ctx = new ClipContext(currentStart, target, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, null);
-            BlockHitResult hit = level.clip(ctx);
-
-            if (hit.getType() == HitResult.Type.MISS) {
-                reachedTarget = true;
-                break;
-            }
-
-            BlockPos hitPos = hit.getBlockPos();
-            Direction face = hit.getDirection();
-            Vec3 entryPt = hit.getLocation();
-            lastHitLoc = entryPt;
-
-            AABB box = new AABB(hitPos);
-            Optional<Vec3> exit = box.clip(entryPt.add(rayDir.scale(0.001)), target);
-            Vec3 exitPt = exit.orElse(entryPt.add(rayDir.scale(1.0)));
-
-            if (!traversedBlocks.contains(hitPos)) {
-                traversedBlocks.add(hitPos);
-                boolean isFloorCeiling = (face.getAxis() == Direction.Axis.Y);
-
-                double topY = hitPos.getY() + 1.0;
-                double bottomY = hitPos.getY();
-                if (Math.abs(exitPt.y - topY) < 0.001 || Math.abs(exitPt.y - bottomY) < 0.001) {
-                    isFloorCeiling = true;
-                }
-
-                float basePenalty = isFloorCeiling ? getFloorCeilingPenalty() : getWallPenalty();
-
-                double thickness = Math.max(1.0, entryPt.distanceTo(exitPt));
-                float penalty = (float) (basePenalty * thickness);
-                remainingRadius -= penalty;
-
-                if (remainingRadius <= 0.0F || straightDist > remainingRadius) {
-                    return SoundResult.blocked(lastHitLoc);
+        while (penetrations < maxPenetrations) {
+            ClipContext forwardCtx = new ClipContext(currentStart, target, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, null);
+            BlockHitResult entryHit = level.clip(forwardCtx);
+            if (entryHit.getType() == HitResult.Type.MISS) {
+                double remainingDist = currentStart.distanceTo(target);
+                remainingRadius -= (float) remainingDist;
+                if (remainingRadius > 0.0F) {
+                    return SoundResult.reachedDirect(straightDist, remainingRadius, source, target);
+                } else {
+                    return SoundResult.blocked(target);
                 }
             }
 
-            // Warp to just outside exit face to continue raycast into next block/space
-            currentStart = exitPt.add(rayDir.scale(0.01));
+            penetrations++;
+            Vec3 entryPoint = entryHit.getLocation();
+            lastStopPos = entryPoint;
+            Direction entryFace = entryHit.getDirection();
+            double distToEntry = currentStart.distanceTo(entryPoint);
+            remainingRadius -= (float) distToEntry;
 
+            if (remainingRadius <= 0.0F) {
+                return SoundResult.blocked(entryPoint);
+            }
+
+            // Reverse raycast from target to locate the exit point of the obstruction
+            ClipContext backwardCtx = new ClipContext(target, entryPoint, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, null);
+            BlockHitResult exitHit = level.clip(backwardCtx);
+
+            Vec3 exitPoint;
+            if (exitHit.getType() == HitResult.Type.MISS) {
+                exitPoint = entryPoint.add(rayDir.scale(0.1));
+            } else {
+                exitPoint = exitHit.getLocation();
+            }
+
+            double obstructionThickness = Math.max(0.1, entryPoint.distanceTo(exitPoint));
+            float penaltyPerMeter = (entryFace.getAxis() == Direction.Axis.Y)
+                    ? getFloorCeilingPenalty()
+                    : getWallPenalty();
+
+            float penalty = (float) (obstructionThickness * penaltyPerMeter);
+            remainingRadius -= penalty;
+
+            if (remainingRadius <= 0.0F) {
+                return SoundResult.blocked(entryPoint);
+            }
+
+            // Nudge forward past exit surface to avoid clipping the same boundary
+            currentStart = exitPoint.add(rayDir.scale(0.05));
             if (currentStart.distanceTo(source) >= straightDist) {
-                reachedTarget = true;
-                break;
+                return SoundResult.reachedDirect(straightDist, remainingRadius, source, target);
             }
         }
 
-        if (!reachedTarget) {
-            return SoundResult.blocked(lastHitLoc);
-        }
-
-        return (straightDist <= remainingRadius)
-                ? SoundResult.reachedDirect(straightDist, remainingRadius - (float) straightDist, source, target)
-                : SoundResult.blocked(lastHitLoc);
+        return SoundResult.blocked(lastStopPos);
     }
 
     /**
-     * 射撃者の周囲にある「物理的に開いているドア」や「部屋の出口」を探索する。
+     * Scans for open paths out of the shooter's immediate room/enclosure.
      */
-    public static BlockPos findShooterRoomExit(Level level, BlockPos center, int radius) {
-        BlockPos nearestDoor = null;
-        double nearestDistSq = Double.MAX_VALUE;
+    public static BlockPos findShooterRoomExit(Level level, BlockPos origin, int radius) {
+        if (!isRoomEnclosed(level, origin)) {
+            return null;
+        }
 
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dz = -radius; dz <= radius; dz++) {
-                for (int dy = -1; dy <= 2; dy++) {
-                    BlockPos pos = center.offset(dx, dy, dz);
-                    if (pos.equals(center)) continue;
+        BlockPos nearest = null;
+        double bestDistSq = Double.MAX_VALUE;
 
-                    BlockState state = level.getBlockState(pos);
-                    // 空気以外のブロック（ドアやトラップドアなど）で、物理的に通過可能なものを最優先
-                    if (!state.isAir() && isPhysicallyPassable(level, pos)) {
-                        double distSq = center.distSqr(pos);
-                        if (distSq < nearestDistSq) {
-                            nearestDistSq = distSq;
-                            nearestDoor = pos;
-                        }
-                    }
+        for (BlockPos checkPos : BlockPos.betweenClosed(
+                origin.offset(-radius, -1, -radius),
+                origin.offset(radius, 2, radius)
+        )) {
+            if (isDoorwayOrPortal(level, checkPos)) {
+                double dSq = origin.distSqr(checkPos);
+                if (dSq < bestDistSq) {
+                    bestDistSq = dSq;
+                    nearest = checkPos.immutable();
                 }
             }
         }
+        return nearest;
+    }
 
-        return nearestDoor;
+    private static boolean isRoomEnclosed(Level level, BlockPos pos) {
+        int solidFaces = 0;
+        for (Direction dir : Direction.values()) {
+            for (int step = 1; step <= 3; step++) {
+                BlockPos p = pos.relative(dir, step);
+                if (!level.getBlockState(p).isAir()) {
+                    solidFaces++;
+                    break;
+                }
+            }
+        }
+        return solidFaces >= 4;
+    }
+
+    private static boolean isDoorwayOrPortal(Level level, BlockPos pos) {
+        return isPhysicallyPassable(level, pos) && (
+                level.getBlockState(pos).is(net.minecraft.tags.BlockTags.DOORS) ||
+                level.getBlockState(pos).is(net.minecraft.tags.BlockTags.TRAPDOORS) ||
+                level.getBlockState(pos).is(net.minecraft.tags.BlockTags.FENCE_GATES)
+        );
     }
 
     /**
-     * Finds nearby openings (air, open doors) around hit location.
-     * Floor/ceiling checks only verify the opening space itself so lower stairs are not falsely excluded;
-     * raycasts in subsequent hops determine actual clearance.
+     * Locates the nearest physically passable opening around an obstacle impact.
      */
-    private static BlockPos findNearestOpening(Level level, BlockPos hitPos, Direction face, int maxDist) {
+    public static BlockPos findNearestOpening(Level level, BlockPos hitPos, Direction face, int maxDist) {
         if (face.getAxis() == Direction.Axis.Y) {
             Direction[] horizontalDirs = {Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST};
             for (int d = 1; d <= maxDist; d++) {

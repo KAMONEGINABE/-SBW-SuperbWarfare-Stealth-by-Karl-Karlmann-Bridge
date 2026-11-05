@@ -3,7 +3,7 @@ package net.addon.superbstealth;
 import net.addon.superbstealth.command.SuperbStealthCommands;
 import net.addon.superbstealth.config.SuperbStealthConfig;
 import net.addon.superbstealth.event.GunShootEventListener;
-import net.addon.superbstealth.util.DebugParticleManager;
+import net.addon.superbstealth.core.DebugParticleManager;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.TickEvent;
@@ -25,7 +25,6 @@ public class SuperbStealthMod {
     public static final String MOD_ID = "superbstealth";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
-    // デバッグ視覚化が有効なプレイヤーUUIDのセット
     public static final Set<UUID> DEBUG_PLAYERS = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     public SuperbStealthMod(FMLJavaModLoadingContext context) {
