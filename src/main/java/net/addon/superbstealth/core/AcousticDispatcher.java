@@ -14,7 +14,7 @@ import net.minecraft.world.phys.Vec3;
 import javax.annotation.Nullable;
 import java.util.List;
 
-// 発砲音や爆発音などの音響伝播シミュレーションを統括するディスパッチャー。
+// Dispatches gunfire acoustic propagation simulation and coordinates sound alerts to listeners.
 
 public final class AcousticDispatcher {
 
@@ -78,7 +78,7 @@ public final class AcousticDispatcher {
             }
         }
 
-        // 先ほどの処理ではエンティティのみ取得し、ブロックは取得できないので、スカルクセンサーを対象に特例処理
+        // Entity queries cannot detect sculk sensors (BlockEntities); dispatch vibrations independently.
 
         SculkVibrationHandler.triggerSculkSensors(level, shootPos, soundRadiusBlocks, isSuppressed, shooter, cachedShooterExit);
 
