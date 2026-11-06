@@ -33,8 +33,6 @@ public final class AcousticDispatcher {
             return;
         }
 
-        // 
-
         AABB scanBox = new AABB(shootPos, shootPos).inflate(soundRadiusBlocks);
         List<Mob> nearbyMobs = level.getEntitiesOfClass(Mob.class, scanBox, mob -> {
             if (mob == null || !mob.isAlive()) {
@@ -54,7 +52,7 @@ public final class AcousticDispatcher {
         int scanRadius = SuperbStealthConfig.CONFIG.shooterExitScanRadius.get();
         BlockPos cachedShooterExit = SoundOcclusionHelper.findShooterRoomExit(level, BlockPos.containing(shootPos), scanRadius);
 
-        ServerPlayer debugPlayer = (shooter instanceof ServerPlayer sp && SuperbStealthMod.DEBUG_PLAYERS.contains(sp.getUUID())) ? sp : null;
+        ServerPlayer debugPlayer = resolveDebugPlayer(shooter);
         if (debugPlayer != null) {
             DebugParticleManager.sendShotHeader(debugPlayer, soundRadiusBlocks, isSuppressed);
         }
@@ -94,5 +92,23 @@ public final class AcousticDispatcher {
                 blockedCount,
                 detouredCount
         );
+    }
+
+    // Resolves a {@link ServerPlayer} who has enabled debug visualization, checking the shooter entity
+    // directly as well as any vehicle passengers (e.g. player driving a tank or flying an attack helicopter).
+
+    @Nullable
+    private static ServerPlayer resolveDebugPlayer(@Nullable Entity shooter) {
+        if (shooter instanceof ServerPlayer sp && SuperbStealthMod.DEBUG_PLAYERS.contains(sp.getUUID())) {
+            return sp;
+        }
+        if (shooter != null) {
+            for (Entity passenger : shooter.getPassengers()) {
+                if (passenger instanceof ServerPlayer sp && SuperbStealthMod.DEBUG_PLAYERS.contains(sp.getUUID())) {
+                    return sp;
+                }
+            }
+        }
+        return null;
     }
 }

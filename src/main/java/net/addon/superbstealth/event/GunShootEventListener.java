@@ -40,8 +40,10 @@ public class GunShootEventListener {
 
         boolean isSuppressed = gunData.attachment.get(AttachmentType.BARREL) == 2;
 
-        // Post directly to Forge event bus to trigger Stealth Mod HUD noise meter without alerting vanilla 16m radius
-        MinecraftForge.EVENT_BUS.post(new VanillaGameEvent(level, GameEvent.PROJECTILE_SHOOT, shootPos, GameEvent.Context.of(shooter)));
+        // Post directly to Forge event bus to trigger Stealth Mod HUD noise meter without alerting vanilla 16m radius.
+        // Suppressed shots use PROJECTILE_SHOOT, unsuppressed shots use EXPLODE for realistic HUD deflection.
+        GameEvent hudEvent = isSuppressed ? GameEvent.PROJECTILE_SHOOT : GameEvent.EXPLODE;
+        MinecraftForge.EVENT_BUS.post(new VanillaGameEvent(level, hudEvent, shootPos, GameEvent.Context.of(shooter)));
 
         // SuperbWarfare SOUND_RADIUS is volume, not distance in meters.
         // Audible distance in Minecraft physics is volume * 0.4 * 16m, allowing detection dozens of meters away.

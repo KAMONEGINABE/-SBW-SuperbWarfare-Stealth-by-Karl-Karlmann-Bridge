@@ -45,6 +45,9 @@ public class SuperbStealthConfig {
     public final ForgeConfigSpec.IntValue suppressedSculkFrequency;
     public final ForgeConfigSpec.IntValue unsuppressedSculkFrequency;
 
+    // --- [tacz] ---
+    public final ForgeConfigSpec.DoubleValue taczSoundRadiusMultiplier;
+
     static {
         Pair<SuperbStealthConfig, ForgeConfigSpec> pair = new ForgeConfigSpec.Builder().configure(SuperbStealthConfig::new);
         CONFIG = pair.getLeft();
@@ -204,6 +207,16 @@ public class SuperbStealthConfig {
                 .comment("Vibration frequency (and resulting redstone comparator output strength 1-15) triggered on sculk sensors by unsuppressed gunshots.",
                         "Default 15 corresponds to maximum loudness (vanilla explosion frequency).")
                 .defineInRange("unsuppressedSculkFrequency", 15, 1, 15);
+
+        builder.pop();
+
+        // [tacz]
+        builder.comment("Timeless and Classics Zero (TACZ) Integration Settings").push("tacz");
+
+        taczSoundRadiusMultiplier = builder
+                .comment("Global multiplier applied to TACZ sound distance to balance audible ranges between TACZ and SuperbWarfare.",
+                        "1.0 preserves TACZ's native distance calculation.")
+                .defineInRange("soundRadiusMultiplier", 1.0, 0.0, 10.0);
 
         builder.pop();
     }
